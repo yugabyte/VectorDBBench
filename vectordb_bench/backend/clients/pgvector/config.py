@@ -74,7 +74,7 @@ class PgVectorIndexConfig(BaseModel, DBCaseConfig):
                 return "vector_l2_ops"
             elif self.metric_type == MetricType.IP:
                 return "vector_ip_ops"
-            return "vector_cosine_ops"
+            return "vector_l2_ops"
 
     def parse_metric_fun_op(self) -> LiteralString:
         if self.quantization_type == "bit":
