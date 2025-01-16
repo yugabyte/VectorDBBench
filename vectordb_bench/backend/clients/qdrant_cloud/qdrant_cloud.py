@@ -62,10 +62,7 @@ class QdrantCloud(VectorDB):
         self.qdrant_client = None
         del self.qdrant_client
 
-    def ready_to_load(self):
-        pass
-
-    def optimize(self):
+    def optimize(self, data_size: int | None = None):
         assert self.qdrant_client, "Please call self.init() before"
         # wait for vectors to be fully indexed
         try:
@@ -76,8 +73,8 @@ class QdrantCloud(VectorDB):
                     continue
                 if info.status == CollectionStatus.GREEN:
                     msg = (
-                        f"Stored vectors: {info.vectors_count}, Indexed vectors: {info.indexed_vectors_count}, ",
-                        f"Collection status: {info.indexed_vectors_count}",
+                        f"Stored vectors: {info.vectors_count}, Indexed vectors: {info.indexed_vectors_count}, "
+                        f"Collection status: {info.indexed_vectors_count}"
                     )
                     log.info(msg)
                     return

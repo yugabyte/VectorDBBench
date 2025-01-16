@@ -143,10 +143,7 @@ class PgVectorScale(VectorDB):
         )
         self.conn.commit()
 
-    def ready_to_load(self):
-        pass
-
-    def optimize(self):
+    def optimize(self, data_size: int | None = None):
         self._post_insert()
 
     def _post_insert(self):
@@ -255,9 +252,7 @@ class PgVectorScale(VectorDB):
 
             return len(metadata), None
         except Exception as e:
-            log.warning(
-                f"Failed to insert data into pgvector table ({self.table_name}), error: {e}",
-            )
+            log.warning(f"Failed to insert data into pgvector table ({self.table_name}), error: {e}")
             return 0, e
 
     def search_embedding(

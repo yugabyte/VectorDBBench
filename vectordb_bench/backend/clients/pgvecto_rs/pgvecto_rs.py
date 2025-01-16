@@ -153,10 +153,7 @@ class PgVectoRS(VectorDB):
         )
         self.conn.commit()
 
-    def ready_to_load(self):
-        pass
-
-    def optimize(self):
+    def optimize(self, data_size: int | None = None):
         self._post_insert()
 
     def _post_insert(self):
@@ -200,10 +197,7 @@ class PgVectoRS(VectorDB):
             self.cursor.execute(index_create_sql)
             self.conn.commit()
         except Exception as e:
-            log.warning(
-                f"Failed to create pgvecto.rs index {self._index_name} \
-                    at table {self.table_name} error: {e}",
-            )
+            log.warning(f"Failed to create pgvecto.rs index {self._index_name} at table {self.table_name} error: {e}")
             raise e from None
 
     def _create_table(self, dim: int):
@@ -258,9 +252,7 @@ class PgVectoRS(VectorDB):
 
             return len(metadata), None
         except Exception as e:
-            log.warning(
-                f"Failed to insert data into pgvecto.rs table ({self.table_name}), error: {e}",
-            )
+            log.warning(f"Failed to insert data into pgvecto.rs table ({self.table_name}), error: {e}")
             return 0, e
 
     def search_embedding(

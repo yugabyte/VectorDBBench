@@ -40,9 +40,10 @@ class DB(Enum):
     AliyunElasticsearch = "AliyunElasticsearch"
     Test = "test"
     AliyunOpenSearch = "AliyunOpenSearch"
+    MongoDB = "MongoDB"
 
     @property
-    def init_cls(self) -> type[VectorDB]:  # noqa: PLR0911, PLR0912
+    def init_cls(self) -> type[VectorDB]:  # noqa: PLR0911, PLR0912, C901
         """Import while in use"""
         if self == DB.Milvus:
             from .milvus.milvus import Milvus
@@ -129,11 +130,21 @@ class DB(Enum):
 
             return AliyunOpenSearch
 
+        if self == DB.MongoDB:
+            from .mongodb.mongodb import MongoDB
+
+            return MongoDB
+
+        if self == DB.Test:
+            from .test.test import Test
+
+            return Test
+
         msg = f"Unknown DB: {self.name}"
         raise ValueError(msg)
 
     @property
-    def config_cls(self) -> type[DBConfig]:  # noqa: PLR0911, PLR0912
+    def config_cls(self) -> type[DBConfig]:  # noqa: PLR0911, PLR0912, C901
         """Import while in use"""
         if self == DB.Milvus:
             from .milvus.config import MilvusConfig
@@ -220,6 +231,16 @@ class DB(Enum):
 
             return AliyunOpenSearchConfig
 
+        if self == DB.MongoDB:
+            from .mongodb.config import MongoDBConfig
+
+            return MongoDBConfig
+
+        if self == DB.Test:
+            from .test.config import TestConfig
+
+            return TestConfig
+
         msg = f"Unknown DB: {self.name}"
         raise ValueError(msg)
 
@@ -291,6 +312,11 @@ class DB(Enum):
             from .aliyun_opensearch.config import AliyunOpenSearchIndexConfig
 
             return AliyunOpenSearchIndexConfig
+
+        if self == DB.MongoDB:
+            from .mongodb.config import MongoDBIndexConfig
+
+            return MongoDBIndexConfig
 
         # DB.Pinecone, DB.Chroma, DB.Redis
         return EmptyDBCaseConfig
