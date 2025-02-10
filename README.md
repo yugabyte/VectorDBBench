@@ -52,6 +52,7 @@ All the database client supported
 | chromadb                 | `pip install vectordb-bench[chromadb]`      |
 | awsopensearch            | `pip install vectordb-bench[opensearch]` |
 | aliyun_opensearch        | `pip install vectordb-bench[aliyun_opensearch]` |
+| mongodb                  | `pip install vectordb-bench[mongodb]`       |
 
 ### Run
 
@@ -152,6 +153,47 @@ Options:
                                   with-gt]
   --help                          Show this message and exit.
 ```
+
+### Run awsopensearch from command line
+
+```shell
+vectordbbench awsopensearch --db-label awsopensearch \
+--m 16 --ef-construction 256 \
+--host search-vector-db-prod-h4f6m4of6x7yp2rz7gdmots7w4.us-west-2.es.amazonaws.com --port 443 \
+--user vector --password '<password>' \
+--case-type Performance1536D5M --num-insert-workers 10  \
+--skip-load --num-concurrency 75
+```
+
+To list the options for awsopensearch, execute `vectordbbench awsopensearch --help`
+
+```text
+$ vectordbbench awsopensearch --help
+Usage: vectordbbench awsopensearch [OPTIONS]
+
+Options:
+  # Sharding and Replication
+  --number-of-shards INTEGER      Number of primary shards for the index
+  --number-of-replicas INTEGER    Number of replica copies for each primary
+                                  shard
+  # Indexing Performance                              
+  --index-thread-qty INTEGER      Thread count for native engine indexing
+  --index-thread-qty-during-force-merge INTEGER
+                                  Thread count during force merge operations
+  --number-of-indexing-clients INTEGER
+                                  Number of concurrent indexing clients
+  # Index Management
+  --number-of-segments INTEGER    Target number of segments after merging
+  --refresh-interval TEXT         How often to make new data available for
+                                  search
+  --force-merge-enabled BOOLEAN   Whether to perform force merge operation
+  --flush-threshold-size TEXT     Size threshold for flushing the transaction
+                                  log
+  # Memory Management
+  --cb-threshold TEXT             k-NN Memory circuit breaker threshold
+
+  --help                          Show this message and exit.```
+
 #### Using a configuration file.
 
 The vectordbbench command can optionally read some or all the options from a yaml formatted configuration file.
@@ -240,13 +282,13 @@ After reopen the repository in container, run `python -m vectordb_bench` in the 
 
 ### Check coding styles
 ```shell
-$ ruff check vectordb_bench
+$ make lint
 ```
 
-Add `--fix` if you want to fix the coding styles automatically
+To fix the coding styles automatically
 
 ```shell
-$ ruff check vectordb_bench --fix
+$ make format
 ```
 
 ## How does it work?
@@ -318,6 +360,13 @@ We have strict requirements for the data set format, please follow them.
 - `Folder Path` - The path to the folder containing all the files. Please ensure that all files in the folder are in the `Parquet` format.
   - Vectors data files: The file must be named `train.parquet` and should have two columns: `id` as an incrementing `int` and `emb` as an array of `float32`.
   - Query test vectors: The file must be named `test.parquet` and should have two columns: `id` as an incrementing `int` and `emb` as an array of `float32`.
+    - We recommend limiting the number of test query vectors, like 1,000.
+    When conducting concurrent query tests, Vdbbench creates a large number of processes. 
+    To minimize additional communication overhead during testing, 
+    we prepare a complete set of test queries for each process, allowing them to run independently.
+    However, this means that as the number of concurrent processes increases, 
+    the number of copied query vectors also increases significantly, 
+    which can place substantial pressure on memory resources.
   - Ground truth file: The file must be named `neighbors.parquet` and should have two columns: `id` corresponding to query vectors and `neighbors_id` as an array of `int`.
 
 - `Train File Count` - If the vector file is too large, you can consider splitting it into multiple files. The naming format for the split files should be `train-[index]-of-[file_count].parquet`. For example, `train-01-of-10.parquet` represents the second file (0-indexed) among 10 split files.
