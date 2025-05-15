@@ -1,4 +1,4 @@
-grpcio==1.53.0
+grpcio==1.53.2
 grpcio-tools==1.53.0
 qdrant-client
 pinecone-client
@@ -22,3 +22,5 @@ environs
 pydantic<v2
 scikit-learn
 pymilvus
+clickhouse_connect
+pyvespa
