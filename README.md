@@ -13,6 +13,8 @@ Closely mimicking real-world production environments, we've set up diverse testi
 
 Prepare to delve into the world of VectorDBBench, and let it guide you in uncovering your perfect vector database match.  
 
+VectorDBBench is sponsered by Zilliz，the leading opensource vectorDB company behind Milvus. Choose smarter with VectorDBBench- start your free test on [zilliz cloud](https://zilliz.com/) today!
+
 **Leaderboard:** https://zilliz.com/benchmark
 ## Quick Start
 ### Prerequirement
@@ -53,6 +55,8 @@ All the database client supported
 | awsopensearch            | `pip install vectordb-bench[opensearch]` |
 | aliyun_opensearch        | `pip install vectordb-bench[aliyun_opensearch]` |
 | mongodb                  | `pip install vectordb-bench[mongodb]`       |
+| tidb                     | `pip install vectordb-bench[tidb]`          |
+| vespa                    | `pip install vectordb-bench[vespa]`         |
 
 ### Run
 
@@ -110,6 +114,10 @@ Options:
   --num-concurrency TEXT          Comma-separated list of concurrency values
                                   to test during concurrent search  [default:
                                   1,10,20]
+  --concurrency-timeout INTEGER   Timeout (in seconds) to wait for a
+                                  concurrency slot before failing. Set to a
+                                  negative value to wait indefinitely.
+                                  [default: 3600]
   --user-name TEXT                Db username  [required]
   --password TEXT                 Db password  [required]
   --host TEXT                     Db host  [required]
@@ -129,7 +137,11 @@ Options:
   --ef-construction INTEGER       hnsw ef-construction
   --ef-search INTEGER             hnsw ef-search
   --quantization-type [none|bit|halfvec]
-                                  quantization type for vectors
+                                  quantization type for vectors (in index)
+  --table-quantization-type [none|bit|halfvec]
+                                  quantization type for vectors (in table). If
+                                  equal to bit, the parameter
+                                  quantization_type will be set to bit too.
   --custom-case-name TEXT         Custom case name i.e. PerformanceCase1536D50K
   --custom-case-description TEXT  Custom name description
   --custom-case-load-timeout INTEGER
@@ -192,7 +204,8 @@ Options:
   # Memory Management
   --cb-threshold TEXT             k-NN Memory circuit breaker threshold
 
-  --help                          Show this message and exit.```
+  --help                          Show this message and exit.
+  ```
 
 #### Using a configuration file.
 
@@ -259,13 +272,13 @@ pip install -e '.[pinecone]'
 ```
 ### Run test server
 ```
-$ python -m vectordb_bench
+python -m vectordb_bench
 ```
 
 OR:
 
 ```shell
-$ init_bench
+init_bench
 ```
 
 OR:
@@ -282,13 +295,13 @@ After reopen the repository in container, run `python -m vectordb_bench` in the 
 
 ### Check coding styles
 ```shell
-$ make lint
+make lint
 ```
 
 To fix the coding styles automatically
 
 ```shell
-$ make format
+make format
 ```
 
 ## How does it work?

@@ -22,3 +22,5 @@ environs
 pydantic<v2
 scikit-learn
 pymilvus
+clickhouse_connect
+pyvespa
