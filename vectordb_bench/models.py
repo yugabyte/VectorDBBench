@@ -106,7 +106,6 @@ class CaseConfigParamType(Enum):
     num_sub_vectors = "num_sub_vectors"
     sample_rate = "sample_rate"
 
-
     # mongodb params
     mongodb_quantization_type = "quantization"
     mongodb_num_candidates_ratio = "num_candidates_ratio"
