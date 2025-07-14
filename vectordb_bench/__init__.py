@@ -76,7 +76,9 @@ class config:
     # Deep1B dataset timeouts (96 dimensions, 1B vectors)
     LOAD_TIMEOUT_96D_1B = 7200 * 3600  # 300d - very large dataset
     OPTIMIZE_TIMEOUT_96D_1B = 7200 * 3600  # 300d - very large dataset
-
+    # Deep1B dataset percentage for testing (0.0 to 1.0, default 1.0 = 100%)
+    DEEP1B_DATASET_PERCENTAGE = env.float("DEEP1B_DATASET_PERCENTAGE", 1.0)
+    
     OPTIMIZE_TIMEOUT_DEFAULT = 24 * 3600  # 24h
     OPTIMIZE_TIMEOUT_768D_1M = 24 * 3600  # 24h
     OPTIMIZE_TIMEOUT_768D_10M = 240 * 3600  # 10d

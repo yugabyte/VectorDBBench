@@ -6,6 +6,7 @@ from pydantic import SecretStr
 
 from vectordb_bench.backend.clients import DB
 from vectordb_bench.backend.clients.api import MetricType
+from vectordb_bench import config
 
 from ....cli.cli import (
     CommonTypedDict,
@@ -140,6 +141,17 @@ class PgVectorTypedDict(CommonTypedDict):
             show_default=True,
         ),
     ]
+    deep1b_dataset_percentage: Annotated[
+        float | None,
+        click.option(
+            "--deep1b_dataset_percentage",
+            type=float,
+            help="Percentage of Deep1B dataset to use (0.0 to 1.0, default: 1.0 = 100%)",
+            default=config.DEEP1B_DATASET_PERCENTAGE,
+            required=False,
+            show_default=False,
+        ),
+    ]
 
 
 class PgVectorIVFFlatTypedDict(PgVectorTypedDict, IVFFlatTypedDict): ...
@@ -173,6 +185,7 @@ def PgVectorIVFFlat(
             quantized_fetch_limit=parameters["quantized_fetch_limit"],
             create_index_before_load=parameters["create_index_before_load"],
             create_index_after_load=parameters["create_index_after_load"],
+            deep1b_dataset_percentage=parameters["deep1b_dataset_percentage"],
         ),
         **parameters,
     )
@@ -211,6 +224,7 @@ def PgVectorHNSW(
             quantized_fetch_limit=parameters["quantized_fetch_limit"],
             create_index_before_load=parameters["create_index_before_load"],
             create_index_after_load=parameters["create_index_after_load"],
+            deep1b_dataset_percentage=parameters["deep1b_dataset_percentage"],
         ),
         **parameters,
     )

@@ -259,8 +259,21 @@ class DatasetManager(BaseModel):
             self.test_data = self._read_file(test_file)
             self.gt_data = self._read_file(gt_file)
 
-        prefix = "shuffle_train" if use_shuffled else "train"
-        self.train_files = sorted([f.name for f in self.data_dir.glob(f"{prefix}*.parquet")])
+        # Handle Deep1B percentage-specific filenames
+        if self.data.name == "Deep1B":
+            percentage = config.DEEP1B_DATASET_PERCENTAGE
+            train_filename = f"train_{int(percentage * 100)}p.parquet"
+            test_filename = f"test_{int(percentage * 100)}p.parquet"
+            
+            # Update test_data for Deep1B with percentage-specific file 
+            if self.data_dir.joinpath(test_filename).exists():
+                self.test_data = self._read_file(test_filename)
+            
+            # Set train files for Deep1B
+            self.train_files = [train_filename] if self.data_dir.joinpath(train_filename).exists() else []
+        else:
+            prefix = "shuffle_train" if use_shuffled else "train"
+            self.train_files = sorted([f.name for f in self.data_dir.glob(f"{prefix}*.parquet")])
         log.debug(f"{self.data.name}: available train files {self.train_files}")
 
         return True

@@ -183,32 +183,52 @@ class Deep1BReader(DatasetReader):
         # Extract and convert to Parquet if not already done
         if not local_ds_root.exists():
             local_ds_root.mkdir(parents=True)
-        # Only create train.parquet and test.parquet if not present
-        train_parquet = local_ds_root.joinpath("train.parquet")
-        test_parquet = local_ds_root.joinpath("test.parquet")
+        
+        # Get the percentage configuration
+        percentage = config.DEEP1B_DATASET_PERCENTAGE
+        if percentage <= 0.0 or percentage > 1.0:
+            raise ValueError(f"DEEP1B_DATASET_PERCENTAGE must be between 0.0 and 1.0, got {percentage}")
+        
+        # Create percentage-specific filenames
+        train_parquet = local_ds_root.joinpath(f"train_{int(percentage * 100)}p.parquet")
+        test_parquet = local_ds_root.joinpath(f"test_{int(percentage * 100)}p.parquet")
+        
         if not train_parquet.exists() or not test_parquet.exists():
-            log.info(f"Extracting and converting Deep1B HDF5 file to Parquet format to base path: {local_ds_root}")
+            log.info(f"Extracting and converting Deep1B HDF5 file to Parquet format with {percentage*100}% of data to base path: {local_ds_root}")
             with h5py.File(hdf5_path, "r") as f:
-                # Extract train vectors
+                # Extract train vectors with percentage sampling
                 train_vectors = f["train"][:]
-                train_ids = list(range(train_vectors.shape[0]))
+                total_train = train_vectors.shape[0]
+                sample_size = int(total_train * percentage)
+                
+                # Use first N% of the data for consistency
+                train_vectors = train_vectors[:sample_size]
+                train_ids = list(range(sample_size))
                 train_df = pl.DataFrame({
                     "id": train_ids,
                     "emb": [v.astype("float32") for v in train_vectors],
                 })
-                log.info(f"Writing train.parquet")
+                log.info(f"Writing train_{int(percentage * 100)}p.parquet with {sample_size:,} vectors")
                 train_df.write_parquet(str(train_parquet))
-                # Extract test vectors
+                
+                # Extract test vectors with percentage sampling
                 test_vectors = f["test"][:]
-                test_ids = list(range(test_vectors.shape[0]))
+                total_test = test_vectors.shape[0]
+                test_sample_size = int(total_test * percentage)
+                
+                # Use first N% of the test data for consistency
+                test_vectors = test_vectors[:test_sample_size]
+                test_ids = list(range(test_sample_size))
                 test_df = pl.DataFrame({
                     "id": test_ids,
                     "emb": [v.astype("float32") for v in test_vectors],
                 })
-                log.info(f"Writing test.parquet")
+                log.info(f"Writing test_{int(percentage * 100)}p.parquet with {test_sample_size:,} vectors")
                 test_df.write_parquet(str(test_parquet))
+        else:
+            log.info(f"Using existing Deep1B dataset files with {percentage*100}% of data")
         
-        log.info("Deep1B dataset preparation completed. Note: No ground truth file is provided.")
+        log.info(f"Deep1B dataset preparation completed with {percentage*100}% of data. Note: No ground truth file is provided.")
 
 def deep1b_reader():
     return Deep1BReader()

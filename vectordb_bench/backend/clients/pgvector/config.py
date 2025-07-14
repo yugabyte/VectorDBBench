@@ -59,6 +59,7 @@ class PgVectorIndexConfig(BaseModel, DBCaseConfig):
     metric_type: MetricType | None = None
     create_index_before_load: bool = False
     create_index_after_load: bool = True
+    deep1b_dataset_percentage: float | None = None
 
     def parse_metric(self) -> str:
         d = {
@@ -173,6 +174,7 @@ class PgVectorIVFFlatConfig(PgVectorIndexConfig):
     reranking_metric: str | None = None
     create_index_before_load: bool | None = True
     create_index_after_load: bool | None = False
+    deep1b_dataset_percentage: float | None = None
 
     def index_param(self) -> PgVectorIndexParam:
         index_parameters = {"lists": self.lists}
@@ -219,6 +221,7 @@ class PgVectorHNSWConfig(PgVectorIndexConfig):
     reranking_metric: str | None = None
     create_index_before_load: bool | None = True
     create_index_after_load: bool | None = False
+    deep1b_dataset_percentage: float | None = None
 
     def index_param(self) -> PgVectorIndexParam:
         index_parameters = {"m": self.m, "ef_construction": self.ef_construction}
