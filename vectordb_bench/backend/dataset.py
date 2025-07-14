@@ -164,7 +164,7 @@ class Deep1B(BaseDataset):
     dim: int = 96
     metric_type: MetricType = MetricType.L2
     use_shuffled: bool = False
-    with_gt: bool = True
+    with_gt: bool = False  # Deep1B doesn't have ground truth by default
     _size_label: dict = {
         1_000_000_000: SizeLabel(1_000_000_000, "LARGE", 100),
     }

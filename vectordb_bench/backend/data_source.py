@@ -187,7 +187,7 @@ class Deep1BReader(DatasetReader):
         train_parquet = local_ds_root.joinpath("train.parquet")
         test_parquet = local_ds_root.joinpath("test.parquet")
         if not train_parquet.exists() or not test_parquet.exists():
-            log.info(f"Extracting and converting Deep1B HDF5 file to Parquet format")
+            log.info(f"Extracting and converting Deep1B HDF5 file to Parquet format to base path: {local_ds_root}")
             with h5py.File(hdf5_path, "r") as f:
                 # Extract train vectors
                 train_vectors = f["train"][:]
@@ -207,7 +207,8 @@ class Deep1BReader(DatasetReader):
                 })
                 log.info(f"Writing test.parquet")
                 test_df.write_parquet(str(test_parquet))
-        # No ground truth for now (could be added if needed)
+        
+        log.info("Deep1B dataset preparation completed. Note: No ground truth file is provided.")
 
 def deep1b_reader():
     return Deep1BReader()
