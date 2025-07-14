@@ -218,6 +218,7 @@ class DatasetManager(BaseModel):
         self,
         source: DatasetSource = DatasetSource.S3,
         filters: float | str | None = None,
+        deep1b_dataset_percentage: float | None = None,
     ) -> bool:
         """Download the dataset from DatasetSource
          url = f"{source}/{self.data.dir_name}"
@@ -247,6 +248,7 @@ class DatasetManager(BaseModel):
                 dataset=self.data.dir_name.lower(),
                 files=all_files,
                 local_ds_root=self.data_dir,
+                deep1b_dataset_percentage=deep1b_dataset_percentage,
             )
         elif not self.data.is_custom:
             source.reader().read(
@@ -261,14 +263,15 @@ class DatasetManager(BaseModel):
 
         # Handle Deep1B percentage-specific filenames
         if self.data.name == "Deep1B":
-            percentage = config.DEEP1B_DATASET_PERCENTAGE
+            # Use the passed parameter if available, otherwise use config
+            percentage = deep1b_dataset_percentage if deep1b_dataset_percentage is not None else config.DEEP1B_DATASET_PERCENTAGE
             train_filename = f"train_{int(percentage * 100)}p.parquet"
             test_filename = f"test_{int(percentage * 100)}p.parquet"
-            
-            # Update test_data for Deep1B with percentage-specific file 
+
+            # Update test_data for Deep1B with percentage-specific file
             if self.data_dir.joinpath(test_filename).exists():
                 self.test_data = self._read_file(test_filename)
-            
+
             # Set train files for Deep1B
             self.train_files = [train_filename] if self.data_dir.joinpath(train_filename).exists() else []
         else:

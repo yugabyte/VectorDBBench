@@ -96,7 +96,11 @@ class CaseRunner(BaseModel):
     def _pre_run(self, drop_old: bool = True):
         try:
             self.init_db(drop_old)
-            self.ca.dataset.prepare(self.dataset_source, filters=self.ca.filter_rate)
+            self.ca.dataset.prepare(
+                self.dataset_source,
+                filters=self.ca.filter_rate,
+                deep1b_dataset_percentage=self.config.deep1b_dataset_percentage,
+            )
         except ModuleNotFoundError as e:
             log.warning(f"pre run case error: please install client for db: {self.config.db}, error={e}")
             raise e from None
@@ -149,13 +153,14 @@ class CaseRunner(BaseModel):
             m = Metric()
             if drop_old:
                 if TaskStage.LOAD in self.config.stages:
-                    _, load_dur = self._load_train_data()
+                    count, load_dur = self._load_train_data()
                     build_dur = self._optimize()
                     m.load_duration = round(load_dur + build_dur, 4)
+                    m.max_load_count = count
                     log.info(
                         f"Finish loading the entire dataset into VectorDB,"
                         f" insert_duration={load_dur}, optimize_duration={build_dur}"
-                        f" load_duration(insert + optimize) = {m.load_duration}"
+                        f" load_duration(insert + optimize) = {m.load_duration}, max_load_count={count}"
                     )
                 else:
                     log.info("Data loading skipped")
@@ -196,7 +201,8 @@ class CaseRunner(BaseModel):
                 self.normalize,
                 self.ca.load_timeout,
             )
-            runner.run()
+            count = runner.run()
+            return count
         except Exception as e:
             raise e from None
         finally:

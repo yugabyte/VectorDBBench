@@ -41,13 +41,14 @@ class DatasetReader(ABC):
     remote_root: str
 
     @abstractmethod
-    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path):
+    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path, deep1b_dataset_percentage: float | None = None):
         """read dataset files from remote_root to local_ds_root,
 
         Args:
             dataset(str): for instance "sift_small_500k"
             files(list[str]):  all filenames of the dataset
             local_ds_root(pathlib.Path): whether to write the remote data.
+            deep1b_dataset_percentage(float | None): percentage of Deep1B dataset to use (only for Deep1B)
         """
 
     @abstractmethod
@@ -75,7 +76,7 @@ class AliyunOSSReader(DatasetReader):
 
         return True
 
-    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path):
+    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path, deep1b_dataset_percentage: float | None = None):
         downloads = []
         if not local_ds_root.exists():
             log.info(f"local dataset root path not exist, creating it: {local_ds_root}")
@@ -125,7 +126,7 @@ class AwsS3Reader(DatasetReader):
             log.info(n)
         return names
 
-    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path):
+    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path, deep1b_dataset_percentage: float | None = None):
         downloads = []
         if not local_ds_root.exists():
             log.info(f"local dataset root path not exist, creating it: {local_ds_root}")
@@ -174,7 +175,7 @@ class Deep1BReader(DatasetReader):
     def validate_file(self, remote: pathlib.Path, local: pathlib.Path) -> bool:
         return local.exists() and local.stat().st_size > 0
 
-    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path):
+    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path, deep1b_dataset_percentage: float | None = None):
         # Download the HDF5 file if not present
         hdf5_path = local_ds_root.parent.joinpath(DEEP1B_HDF5_FILENAME)
         if not hdf5_path.exists():
@@ -184,8 +185,9 @@ class Deep1BReader(DatasetReader):
         if not local_ds_root.exists():
             local_ds_root.mkdir(parents=True)
         
-        # Get the percentage configuration
-        percentage = config.DEEP1B_DATASET_PERCENTAGE
+        # Get the percentage configuration - use task config if provided, otherwise use global config
+        percentage = deep1b_dataset_percentage if deep1b_dataset_percentage is not None else config.DEEP1B_DATASET_PERCENTAGE
+        log.info(f"DEBUG: Dataset preparation reading DEEP1B_DATASET_PERCENTAGE = {percentage} (task_config={deep1b_dataset_percentage}, global_config={config.DEEP1B_DATASET_PERCENTAGE})")
         if percentage <= 0.0 or percentage > 1.0:
             raise ValueError(f"DEEP1B_DATASET_PERCENTAGE must be between 0.0 and 1.0, got {percentage}")
         

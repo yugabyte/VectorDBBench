@@ -153,6 +153,7 @@ class TaskConfig(BaseModel):
     db_case_config: DBCaseConfig
     case_config: CaseConfig
     stages: list[TaskStage] = ALL_TASK_STAGES
+    deep1b_dataset_percentage: float | None = None
 
     @property
     def db_name(self):
