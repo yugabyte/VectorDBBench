@@ -44,6 +44,9 @@ class CaseType(Enum):
 
     Performance1536D50K = 50
 
+    # Deep1B dataset cases
+    Performance96D1B = 60
+
     Custom = 100
     PerformanceCustomDataset = 101
 
@@ -302,6 +305,18 @@ class Performance1536D50K(PerformanceCase):
     optimize_timeout: float | int | None = config.OPTIMIZE_TIMEOUT_DEFAULT
 
 
+class Performance96D1B(PerformanceCase):
+    case_id: CaseType = CaseType.Performance96D1B
+    filter_rate: float | int | None = None
+    dataset: DatasetManager = Dataset.DEEP1B.manager(1_000_000_000)
+    name: str = "Search Performance Test (1B Dataset, 96 Dim)"
+    description: str = """This case tests the search performance of a vector database with a very large 1B dataset
+    (<b>Deep1B 1B vectors</b>, 96 dimensions), at varying parallel levels. Results will show index building time,
+    recall, and maximum QPS."""
+    load_timeout: float | int = config.LOAD_TIMEOUT_96D_1B
+    optimize_timeout: float | int | None = config.OPTIMIZE_TIMEOUT_96D_1B
+
+
 def metric_type_map(s: str) -> MetricType:
     if s.lower() == "cosine":
         return MetricType.COSINE
@@ -366,5 +381,6 @@ type2case = {
     CaseType.Performance1536D500K99P: Performance1536D500K99P,
     CaseType.Performance1536D5M99P: Performance1536D5M99P,
     CaseType.Performance1536D50K: Performance1536D50K,
+    CaseType.Performance96D1B: Performance96D1B,
     CaseType.PerformanceCustomDataset: PerformanceCustomDataset,
 }

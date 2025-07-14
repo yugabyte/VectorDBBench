@@ -7,6 +7,9 @@ from enum import Enum
 from tqdm import tqdm
 
 from vectordb_bench import config
+import h5py
+import polars as pl
+from vectordb_bench.backend.utils import download_file
 
 logging.getLogger("s3fs").setLevel(logging.CRITICAL)
 
@@ -18,6 +21,7 @@ DatasetReader = typing.TypeVar("DatasetReader")
 class DatasetSource(Enum):
     S3 = "S3"
     AliyunOSS = "AliyunOSS"
+    Deep1BLocal = "Deep1BLocal"
 
     def reader(self) -> DatasetReader:
         if self == DatasetSource.S3:
@@ -25,6 +29,9 @@ class DatasetSource(Enum):
 
         if self == DatasetSource.AliyunOSS:
             return AliyunOSSReader()
+
+        if self == DatasetSource.Deep1BLocal:
+            return Deep1BReader()
 
         return None
 
@@ -155,3 +162,49 @@ class AwsS3Reader(DatasetReader):
             return False
 
         return True
+
+
+DEEP1B_URL = "http://ann-benchmarks.com/deep-image-96-angular.hdf5"
+DEEP1B_HDF5_FILENAME = "deep-image-96-angular.hdf5"
+
+class Deep1BReader(DatasetReader):
+    source: DatasetSource = None  # Not a remote source
+    remote_root: str = DEEP1B_URL
+
+    def validate_file(self, remote: pathlib.Path, local: pathlib.Path) -> bool:
+        return local.exists() and local.stat().st_size > 0
+
+    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path):
+        # Download the HDF5 file if not present
+        hdf5_path = local_ds_root.parent.joinpath(DEEP1B_HDF5_FILENAME)
+        if not hdf5_path.exists():
+            local_ds_root.parent.mkdir(parents=True, exist_ok=True)
+            download_file(DEEP1B_URL, str(hdf5_path))
+        # Extract and convert to Parquet if not already done
+        if not local_ds_root.exists():
+            local_ds_root.mkdir(parents=True)
+        # Only create train.parquet and test.parquet if not present
+        train_parquet = local_ds_root.joinpath("train.parquet")
+        test_parquet = local_ds_root.joinpath("test.parquet")
+        if not train_parquet.exists() or not test_parquet.exists():
+            with h5py.File(hdf5_path, "r") as f:
+                # Extract train vectors
+                train_vectors = f["train"][:]
+                train_ids = list(range(train_vectors.shape[0]))
+                train_df = pl.DataFrame({
+                    "id": train_ids,
+                    "emb": [v.astype("float32") for v in train_vectors],
+                })
+                train_df.write_parquet(str(train_parquet))
+                # Extract test vectors
+                test_vectors = f["test"][:]
+                test_ids = list(range(test_vectors.shape[0]))
+                test_df = pl.DataFrame({
+                    "id": test_ids,
+                    "emb": [v.astype("float32") for v in test_vectors],
+                })
+                test_df.write_parquet(str(test_parquet))
+        # No ground truth for now (could be added if needed)
+
+def deep1b_reader():
+    return Deep1BReader()

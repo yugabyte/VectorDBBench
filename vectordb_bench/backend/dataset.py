@@ -37,19 +37,21 @@ class BaseDataset(BaseModel):
     metric_type: MetricType
     use_shuffled: bool
     with_gt: bool = False
-    _size_label: dict[int, SizeLabel] = PrivateAttr()
     is_custom: bool = False
 
     @validator("size")
     def verify_size(cls, v: int):
-        if v not in cls._size_label:
-            msg = f"Size {v} not supported for the dataset, expected: {cls._size_label.keys()}"
+        if not hasattr(cls, '_size_label') or v not in cls._size_label:
+            msg = f"Size {v} not supported for the dataset, expected: {getattr(cls, '_size_label', {}).keys()}"
             raise ValueError(msg)
         return v
 
     @property
     def label(self) -> str:
-        return self._size_label.get(self.size).label
+        if not hasattr(type(self), '_size_label'):
+            return ""
+        size_label = type(self)._size_label.get(self.size)
+        return size_label.label if size_label else ""
 
     @property
     def dir_name(self) -> str:
@@ -57,7 +59,10 @@ class BaseDataset(BaseModel):
 
     @property
     def file_count(self) -> int:
-        return self._size_label.get(self.size).file_count
+        if not hasattr(type(self), '_size_label'):
+            return 0
+        size_label = type(self)._size_label.get(self.size)
+        return size_label.file_count if size_label else 0
 
 
 class CustomDataset(BaseDataset):
@@ -109,7 +114,7 @@ class Cohere(BaseDataset):
     dim: int = 768
     metric_type: MetricType = MetricType.COSINE
     use_shuffled: bool = config.USE_SHUFFLED_DATA
-    with_gt: bool = (True,)
+    with_gt: bool = True
     _size_label: dict = {
         100_000: SizeLabel(100_000, "SMALL", 1),
         1_000_000: SizeLabel(1_000_000, "MEDIUM", 1),
@@ -146,11 +151,22 @@ class OpenAI(BaseDataset):
     dim: int = 1536
     metric_type: MetricType = MetricType.COSINE
     use_shuffled: bool = config.USE_SHUFFLED_DATA
-    with_gt: bool = (True,)
+    with_gt: bool = True
     _size_label: dict = {
         50_000: SizeLabel(50_000, "SMALL", 1),
         500_000: SizeLabel(500_000, "MEDIUM", 1),
         5_000_000: SizeLabel(5_000_000, "LARGE", 10),
+    }
+
+
+class Deep1B(BaseDataset):
+    name: str = "Deep1B"
+    dim: int = 96
+    metric_type: MetricType = MetricType.L2
+    use_shuffled: bool = False
+    with_gt: bool = True
+    _size_label: dict = {
+        1_000_000_000: SizeLabel(1_000_000_000, "LARGE", 100),
     }
 
 
@@ -171,7 +187,7 @@ class DatasetManager(BaseModel):
     train_files: list[str] = []
     reader: DatasetReader | None = None
 
-    def __eq__(self, obj: any):
+    def __eq__(self, obj: object) -> bool:
         if isinstance(obj, DatasetManager):
             return self.data.name == obj.data.name and self.data.label == obj.data.label
         return False
@@ -225,7 +241,14 @@ class DatasetManager(BaseModel):
             gt_file, test_file = utils.compose_gt_file(filters), "test.parquet"
             all_files.extend([gt_file, test_file])
 
-        if not self.data.is_custom:
+        # Use Deep1BReader for Deep1B dataset
+        if self.data.name == "Deep1B":
+            DatasetSource.Deep1BLocal.reader().read(
+                dataset=self.data.dir_name.lower(),
+                files=all_files,
+                local_ds_root=self.data_dir,
+            )
+        elif not self.data.is_custom:
             source.reader().read(
                 dataset=self.data.dir_name.lower(),
                 files=all_files,
@@ -250,7 +273,7 @@ class DatasetManager(BaseModel):
             log.warning(f"No such file: {p}")
             return pd.DataFrame()
 
-        return pl.read_parquet(p)
+        return pl.read_parquet(p).to_pandas()
 
 
 class DataSetIterator:
@@ -307,6 +330,7 @@ class Dataset(Enum):
     GLOVE = Glove
     SIFT = SIFT
     OPENAI = OpenAI
+    DEEP1B = Deep1B
 
     def get(self, size: int) -> BaseDataset:
         return self.value(size=size)

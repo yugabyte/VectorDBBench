@@ -73,6 +73,10 @@ class config:
     LOAD_TIMEOUT_1536D_500K = 24 * 3600  # 24h
     LOAD_TIMEOUT_1536D_5M = 240 * 3600  # 10d
 
+    # Deep1B dataset timeouts (96 dimensions, 1B vectors)
+    LOAD_TIMEOUT_96D_1B = 7200 * 3600  # 300d - very large dataset
+    OPTIMIZE_TIMEOUT_96D_1B = 7200 * 3600  # 300d - very large dataset
+
     OPTIMIZE_TIMEOUT_DEFAULT = 24 * 3600  # 24h
     OPTIMIZE_TIMEOUT_768D_1M = 24 * 3600  # 24h
     OPTIMIZE_TIMEOUT_768D_10M = 240 * 3600  # 10d
