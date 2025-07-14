@@ -286,6 +286,13 @@ class DataSetIterator:
     def __iter__(self):
         return self
 
+    def _get_batch_size(self) -> int:
+        """Get batch size for the current dataset"""
+        # Deep1B dataset uses larger batch size for better performance
+        if self._ds.data.name == "Deep1B":
+            return 1_000_000
+        return config.NUM_PER_BATCH
+
     def _get_iter(self, file_name: str):
         p = pathlib.Path(self._ds.data_dir, file_name)
         log.info(f"Get iterator for {p.name}")
@@ -293,7 +300,9 @@ class DataSetIterator:
             msg = f"No such file: {p}"
             log.warning(msg)
             raise IndexError(msg)
-        return ParquetFile(p, memory_map=True, pre_buffer=True).iter_batches(config.NUM_PER_BATCH)
+        batch_size = self._get_batch_size()
+        log.info(f"Using batch size {batch_size} for dataset {self._ds.data.name}")
+        return ParquetFile(p, memory_map=True, pre_buffer=True).iter_batches(batch_size)
 
     def __next__(self) -> pd.DataFrame:
         """return the data in the next file of the training list"""
