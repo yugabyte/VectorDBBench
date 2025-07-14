@@ -187,6 +187,7 @@ class Deep1BReader(DatasetReader):
         train_parquet = local_ds_root.joinpath("train.parquet")
         test_parquet = local_ds_root.joinpath("test.parquet")
         if not train_parquet.exists() or not test_parquet.exists():
+            log.info(f"Extracting and converting Deep1B HDF5 file to Parquet format")
             with h5py.File(hdf5_path, "r") as f:
                 # Extract train vectors
                 train_vectors = f["train"][:]
@@ -195,6 +196,7 @@ class Deep1BReader(DatasetReader):
                     "id": train_ids,
                     "emb": [v.astype("float32") for v in train_vectors],
                 })
+                log.info(f"Writing train.parquet")
                 train_df.write_parquet(str(train_parquet))
                 # Extract test vectors
                 test_vectors = f["test"][:]
@@ -203,6 +205,7 @@ class Deep1BReader(DatasetReader):
                     "id": test_ids,
                     "emb": [v.astype("float32") for v in test_vectors],
                 })
+                log.info(f"Writing test.parquet")
                 test_df.write_parquet(str(test_parquet))
         # No ground truth for now (could be added if needed)
 
