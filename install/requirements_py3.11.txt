@@ -22,3 +22,5 @@ environs
 pydantic<v2
 scikit-learn
 pymilvus
+h5py
+requests
