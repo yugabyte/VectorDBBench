@@ -401,6 +401,15 @@ class CommonTypedDict(TypedDict):
             show_default=True,
         ),
     ]
+    deep1b_dataset_percentage: Annotated[
+        float,
+        click.option(
+            "--deep1b-dataset-percentage",
+            help="Percentage of Deep1B dataset to use (0.0 to 1.0, default: 1.0 = 100%)",
+            default=config.DEEP1B_DATASET_PERCENTAGE,
+            show_default=True,
+        ),
+    ]
 
 
 class HNSWBaseTypedDict(TypedDict):
@@ -466,14 +475,32 @@ def run(
     db_case_config: DBCaseConfig,
     **parameters: Unpack[CommonTypedDict],
 ):
-    """Builds a single VectorDBBench Task and runs it, awaiting the task until finished.
+    # DEBUG: Print parameters to see what is being passed
+    log.info("=" * 80)
+    log.info(f"DEBUG: CLI parameters: {parameters}")
+    log.info(f"DEBUG: All parameter keys: {list(parameters.keys())}")
+    log.info("=" * 80)
 
-    Args:
-        db (DB)
-        db_config (DBConfig)
-        db_case_config (DBCaseConfig)
-        **parameters: expects keys from CommonTypedDict
-    """
+    # Accept both underscore and dash versions
+    for key in ["deep1b_dataset_percentage", "deep1b-dataset-percentage"]:
+        if key in parameters and parameters[key] is not None:
+            try:
+                config.DEEP1B_DATASET_PERCENTAGE = float(parameters[key])
+                log.info(f"DEBUG: Set config.DEEP1B_DATASET_PERCENTAGE = {config.DEEP1B_DATASET_PERCENTAGE}")
+            except Exception as e:
+                log.info(f"DEBUG: Could not set DEEP1B_DATASET_PERCENTAGE from {key}: {e}")
+        else:
+            log.info(f"DEBUG: Key '{key}' not found or is None in parameters")
+
+    # Get deep1b_dataset_percentage from parameters
+    deep1b_dataset_percentage = None
+    for key in ["deep1b_dataset_percentage", "deep1b-dataset-percentage"]:
+        if key in parameters and parameters[key] is not None:
+            try:
+                deep1b_dataset_percentage = float(parameters[key])
+                break
+            except Exception as e:
+                log.info(f"DEBUG: Could not convert DEEP1B_DATASET_PERCENTAGE from {key}: {e}")
 
     task = TaskConfig(
         db=db,
@@ -494,6 +521,7 @@ def run(
             parameters["search_serial"],
             parameters["search_concurrent"],
         ),
+        deep1b_dataset_percentage=deep1b_dataset_percentage,
     )
 
     log.info(f"Task:\n{pformat(task)}\n")

@@ -37,19 +37,21 @@ class BaseDataset(BaseModel):
     metric_type: MetricType
     use_shuffled: bool
     with_gt: bool = False
-    _size_label: dict[int, SizeLabel] = PrivateAttr()
     is_custom: bool = False
 
     @validator("size")
     def verify_size(cls, v: int):
-        if v not in cls._size_label:
-            msg = f"Size {v} not supported for the dataset, expected: {cls._size_label.keys()}"
+        if not hasattr(cls, '_size_label') or v not in cls._size_label:
+            msg = f"Size {v} not supported for the dataset, expected: {getattr(cls, '_size_label', {}).keys()}"
             raise ValueError(msg)
         return v
 
     @property
     def label(self) -> str:
-        return self._size_label.get(self.size).label
+        if not hasattr(type(self), '_size_label'):
+            return ""
+        size_label = type(self)._size_label.get(self.size)
+        return size_label.label if size_label else ""
 
     @property
     def dir_name(self) -> str:
@@ -57,7 +59,10 @@ class BaseDataset(BaseModel):
 
     @property
     def file_count(self) -> int:
-        return self._size_label.get(self.size).file_count
+        if not hasattr(type(self), '_size_label'):
+            return 0
+        size_label = type(self)._size_label.get(self.size)
+        return size_label.file_count if size_label else 0
 
 
 class CustomDataset(BaseDataset):
@@ -109,7 +114,7 @@ class Cohere(BaseDataset):
     dim: int = 768
     metric_type: MetricType = MetricType.COSINE
     use_shuffled: bool = config.USE_SHUFFLED_DATA
-    with_gt: bool = (True,)
+    with_gt: bool = True
     _size_label: dict = {
         100_000: SizeLabel(100_000, "SMALL", 1),
         1_000_000: SizeLabel(1_000_000, "MEDIUM", 1),
@@ -146,11 +151,22 @@ class OpenAI(BaseDataset):
     dim: int = 1536
     metric_type: MetricType = MetricType.COSINE
     use_shuffled: bool = config.USE_SHUFFLED_DATA
-    with_gt: bool = (True,)
+    with_gt: bool = True
     _size_label: dict = {
         50_000: SizeLabel(50_000, "SMALL", 1),
         500_000: SizeLabel(500_000, "MEDIUM", 1),
         5_000_000: SizeLabel(5_000_000, "LARGE", 10),
+    }
+
+
+class Deep1B(BaseDataset):
+    name: str = "Deep1B"
+    dim: int = 96
+    metric_type: MetricType = MetricType.L2
+    use_shuffled: bool = False
+    with_gt: bool = False  # Deep1B doesn't have ground truth by default
+    _size_label: dict = {
+        1_000_000_000: SizeLabel(1_000_000_000, "LARGE", 100),
     }
 
 
@@ -171,7 +187,7 @@ class DatasetManager(BaseModel):
     train_files: list[str] = []
     reader: DatasetReader | None = None
 
-    def __eq__(self, obj: any):
+    def __eq__(self, obj: object) -> bool:
         if isinstance(obj, DatasetManager):
             return self.data.name == obj.data.name and self.data.label == obj.data.label
         return False
@@ -202,6 +218,7 @@ class DatasetManager(BaseModel):
         self,
         source: DatasetSource = DatasetSource.S3,
         filters: float | str | None = None,
+        deep1b_dataset_percentage: float | None = None,
     ) -> bool:
         """Download the dataset from DatasetSource
          url = f"{source}/{self.data.dir_name}"
@@ -225,7 +242,15 @@ class DatasetManager(BaseModel):
             gt_file, test_file = utils.compose_gt_file(filters), "test.parquet"
             all_files.extend([gt_file, test_file])
 
-        if not self.data.is_custom:
+        # Use Deep1BReader for Deep1B dataset
+        if self.data.name == "Deep1B":
+            DatasetSource.Deep1BLocal.reader().read(
+                dataset=self.data.dir_name.lower(),
+                files=all_files,
+                local_ds_root=self.data_dir,
+                deep1b_dataset_percentage=deep1b_dataset_percentage,
+            )
+        elif not self.data.is_custom:
             source.reader().read(
                 dataset=self.data.dir_name.lower(),
                 files=all_files,
@@ -236,8 +261,22 @@ class DatasetManager(BaseModel):
             self.test_data = self._read_file(test_file)
             self.gt_data = self._read_file(gt_file)
 
-        prefix = "shuffle_train" if use_shuffled else "train"
-        self.train_files = sorted([f.name for f in self.data_dir.glob(f"{prefix}*.parquet")])
+        # Handle Deep1B percentage-specific filenames
+        if self.data.name == "Deep1B":
+            # Use the passed parameter if available, otherwise use config
+            percentage = deep1b_dataset_percentage if deep1b_dataset_percentage is not None else config.DEEP1B_DATASET_PERCENTAGE
+            train_filename = f"train_{int(percentage * 100)}p.parquet"
+            test_filename = f"test_{int(percentage * 100)}p.parquet"
+
+            # Update test_data for Deep1B with percentage-specific file
+            if self.data_dir.joinpath(test_filename).exists():
+                self.test_data = self._read_file(test_filename)
+
+            # Set train files for Deep1B
+            self.train_files = [train_filename] if self.data_dir.joinpath(train_filename).exists() else []
+        else:
+            prefix = "shuffle_train" if use_shuffled else "train"
+            self.train_files = sorted([f.name for f in self.data_dir.glob(f"{prefix}*.parquet")])
         log.debug(f"{self.data.name}: available train files {self.train_files}")
 
         return True
@@ -250,7 +289,7 @@ class DatasetManager(BaseModel):
             log.warning(f"No such file: {p}")
             return pd.DataFrame()
 
-        return pl.read_parquet(p)
+        return pl.read_parquet(p).to_pandas()
 
 
 class DataSetIterator:
@@ -263,6 +302,13 @@ class DataSetIterator:
     def __iter__(self):
         return self
 
+    def _get_batch_size(self) -> int:
+        """Get batch size for the current dataset"""
+        # Deep1B dataset uses larger batch size for better performance
+        if self._ds.data.name == "Deep1B":
+            return 1_000_000
+        return config.NUM_PER_BATCH
+
     def _get_iter(self, file_name: str):
         p = pathlib.Path(self._ds.data_dir, file_name)
         log.info(f"Get iterator for {p.name}")
@@ -270,7 +316,9 @@ class DataSetIterator:
             msg = f"No such file: {p}"
             log.warning(msg)
             raise IndexError(msg)
-        return ParquetFile(p, memory_map=True, pre_buffer=True).iter_batches(config.NUM_PER_BATCH)
+        batch_size = self._get_batch_size()
+        log.info(f"Using batch size {batch_size} for dataset {self._ds.data.name}")
+        return ParquetFile(p, memory_map=True, pre_buffer=True).iter_batches(batch_size)
 
     def __next__(self) -> pd.DataFrame:
         """return the data in the next file of the training list"""
@@ -307,6 +355,7 @@ class Dataset(Enum):
     GLOVE = Glove
     SIFT = SIFT
     OPENAI = OpenAI
+    DEEP1B = Deep1B
 
     def get(self, size: int) -> BaseDataset:
         return self.value(size=size)

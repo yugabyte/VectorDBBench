@@ -6,6 +6,7 @@ from pydantic import SecretStr
 
 from vectordb_bench.backend.clients import DB
 from vectordb_bench.backend.clients.api import MetricType
+from vectordb_bench import config
 
 from ....cli.cli import (
     CommonTypedDict,
