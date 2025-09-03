@@ -3,13 +3,16 @@ import pathlib
 import typing
 from abc import ABC, abstractmethod
 from enum import Enum
+import struct
 
 from tqdm import tqdm
 
 from vectordb_bench import config
 import h5py
+import numpy as np
 import polars as pl
 from vectordb_bench.backend.utils import download_file
+import os
 
 logging.getLogger("s3fs").setLevel(logging.CRITICAL)
 
@@ -165,8 +168,66 @@ class AwsS3Reader(DatasetReader):
         return True
 
 
-DEEP1B_URL = "http://ann-benchmarks.com/deep-image-96-angular.hdf5"
-DEEP1B_HDF5_FILENAME = "deep-image-96-angular.hdf5"
+# Default DEEP1B URL - can be overridden by DEEP1B_URL environment variable
+DEFAULT_DEEP1B_URL = "http://ann-benchmarks.com/deep-image-96-angular.hdf5"
+
+# Get DEEP1B_URL from environment variable or use default
+DEEP1B_URL = os.getenv("DEEP1B_URL", DEFAULT_DEEP1B_URL)
+
+# Log the source of the URL
+if "DEEP1B_URL" in os.environ:
+    log.info(f"Using DEEP1B_URL from environment variable: {DEEP1B_URL}")
+else:
+    log.info(f"Using default DEEP1B_URL (no environment variable set): {DEEP1B_URL}")
+
+def get_file_extension(url: str) -> str:
+    """Extract file extension from URL"""
+    return pathlib.Path(url).suffix.lower()
+
+def get_filename_from_url(url: str) -> str:
+    """Extract filename from URL"""
+    return url.split("/")[-1]
+
+def read_fbin_file(file_path: pathlib.Path) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Read .fbin format file and return train and test vectors.
+    
+    Args:
+        file_path: Path to the .fbin file
+        
+    Returns:
+        Tuple of (train_vectors, test_vectors) as numpy arrays
+        
+    Note:
+        .fbin format typically contains:
+        - 4 bytes: number of vectors (int32)
+        - 4 bytes: number of dimensions (int32)
+        - vector data: num_vectors * num_dimensions * 4 bytes (float32)
+    """
+    log.info(f"Reading .fbin file: {file_path}")
+    
+    with open(file_path, 'rb') as f:
+        # Read header
+        num_vectors = struct.unpack('i', f.read(4))[0]
+        num_dimensions = struct.unpack('i', f.read(4))[0]
+        
+        log.info(f"Found {num_vectors:,} vectors with {num_dimensions} dimensions in .fbin file")
+        
+        # Read all vectors
+        vectors = np.fromfile(f, dtype=np.float32, count=num_vectors * num_dimensions)
+        vectors = vectors.reshape(num_vectors, num_dimensions)
+        
+        # For .fbin files, we'll split them into train/test sets
+        # Use 90% for training, 10% for testing
+        split_point = int(num_vectors * 0.9)
+        train_vectors = vectors[:split_point]
+        test_vectors = vectors[split_point:]
+        
+        log.info(f"Split into {len(train_vectors):,} train vectors and {len(test_vectors):,} test vectors")
+        
+        return train_vectors, test_vectors
+
+DEEP1B_FILENAME = get_filename_from_url(DEEP1B_URL)
 
 class Deep1BReader(DatasetReader):
     source: DatasetSource = None  # Not a remote source
@@ -176,11 +237,17 @@ class Deep1BReader(DatasetReader):
         return local.exists() and local.stat().st_size > 0
 
     def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path, deep1b_dataset_percentage: float | None = None):
-        # Download the HDF5 file if not present
-        hdf5_path = local_ds_root.parent.joinpath(DEEP1B_HDF5_FILENAME)
-        if not hdf5_path.exists():
+        # Detect file type from URL
+        file_extension = get_file_extension(DEEP1B_URL)
+        filename = get_filename_from_url(DEEP1B_URL)
+        
+        # Download the file if not present
+        downloaded_file_path = local_ds_root.parent.joinpath(filename)
+        if not downloaded_file_path.exists():
             local_ds_root.parent.mkdir(parents=True, exist_ok=True)
-            download_file(DEEP1B_URL, str(hdf5_path))
+            log.info(f"Downloading {filename} from {DEEP1B_URL}")
+            download_file(DEEP1B_URL, str(downloaded_file_path))
+        
         # Extract and convert to Parquet if not already done
         if not local_ds_root.exists():
             local_ds_root.mkdir(parents=True)
@@ -196,41 +263,87 @@ class Deep1BReader(DatasetReader):
         test_parquet = local_ds_root.joinpath(f"test_{int(percentage * 100)}p.parquet")
         
         if not train_parquet.exists() or not test_parquet.exists():
-            log.info(f"Extracting and converting Deep1B HDF5 file to Parquet format with {percentage*100}% of data to base path: {local_ds_root}")
-            with h5py.File(hdf5_path, "r") as f:
-                # Extract train vectors with percentage sampling
-                train_vectors = f["train"][:]
-                total_train = train_vectors.shape[0]
-                sample_size = int(total_train * percentage)
-                
-                # Use first N% of the data for consistency
-                train_vectors = train_vectors[:sample_size]
-                train_ids = list(range(sample_size))
-                train_df = pl.DataFrame({
-                    "id": train_ids,
-                    "emb": [v.astype("float32") for v in train_vectors],
-                })
-                log.info(f"Writing train_{int(percentage * 100)}p.parquet with {sample_size:,} vectors")
-                train_df.write_parquet(str(train_parquet))
-                
-                # Extract test vectors with percentage sampling
-                test_vectors = f["test"][:]
-                total_test = test_vectors.shape[0]
-                test_sample_size = int(total_test * percentage)
-                
-                # Use first N% of the test data for consistency
-                test_vectors = test_vectors[:test_sample_size]
-                test_ids = list(range(test_sample_size))
-                test_df = pl.DataFrame({
-                    "id": test_ids,
-                    "emb": [v.astype("float32") for v in test_vectors],
-                })
-                log.info(f"Writing test_{int(percentage * 100)}p.parquet with {test_sample_size:,} vectors")
-                test_df.write_parquet(str(test_parquet))
+            log.info(f"Converting {file_extension} file to Parquet format with {percentage*100}% of data to base path: {local_ds_root}")
+            
+            if file_extension == '.hdf5':
+                # Handle HDF5 files (original format)
+                self._convert_hdf5_to_parquet(downloaded_file_path, train_parquet, test_parquet, percentage)
+            elif file_extension == '.fbin':
+                # Handle .fbin files (new format)
+                self._convert_fbin_to_parquet(downloaded_file_path, train_parquet, test_parquet, percentage)
+            else:
+                raise ValueError(f"Unsupported file format: {file_extension}. Supported formats are .hdf5 and .fbin")
         else:
             log.info(f"Using existing Deep1B dataset files with {percentage*100}% of data")
         
         log.info(f"Deep1B dataset preparation completed with {percentage*100}% of data. Note: No ground truth file is provided.")
+    
+    def _convert_hdf5_to_parquet(self, hdf5_path: pathlib.Path, train_parquet: pathlib.Path, test_parquet: pathlib.Path, percentage: float):
+        """Convert HDF5 file to Parquet format"""
+        log.info(f"Converting HDF5 file: {hdf5_path}")
+        with h5py.File(hdf5_path, "r") as f:
+            # Extract train vectors with percentage sampling
+            train_vectors = f["train"][:]
+            total_train = train_vectors.shape[0]
+            sample_size = int(total_train * percentage)
+            
+            # Use first N% of the data for consistency
+            train_vectors = train_vectors[:sample_size]
+            train_ids = list(range(sample_size))
+            train_df = pl.DataFrame({
+                "id": train_ids,
+                "emb": [v.astype("float32") for v in train_vectors],
+            })
+            log.info(f"Writing train_{int(percentage * 100)}p.parquet with {sample_size:,} vectors")
+            train_df.write_parquet(str(train_parquet))
+            
+            # Extract test vectors with percentage sampling
+            test_vectors = f["test"][:]
+            total_test = test_vectors.shape[0]
+            test_sample_size = int(total_test * percentage)
+            
+            # Use first N% of the test data for consistency
+            test_vectors = test_vectors[:test_sample_size]
+            test_ids = list(range(test_sample_size))
+            test_df = pl.DataFrame({
+                "id": test_ids,
+                "emb": [v.astype("float32") for v in test_vectors],
+            })
+            log.info(f"Writing test_{int(percentage * 100)}p.parquet with {test_sample_size:,} vectors")
+            test_df.write_parquet(str(test_parquet))
+    
+    def _convert_fbin_to_parquet(self, fbin_path: pathlib.Path, train_parquet: pathlib.Path, test_parquet: pathlib.Path, percentage: float):
+        """Convert .fbin file to Parquet format"""
+        log.info(f"Converting .fbin file: {fbin_path}")
+        
+        # Read the .fbin file
+        all_train_vectors, all_test_vectors = read_fbin_file(fbin_path)
+        
+        # Apply percentage sampling to training vectors
+        total_train = all_train_vectors.shape[0]
+        sample_size = int(total_train * percentage)
+        train_vectors = all_train_vectors[:sample_size]
+        train_ids = list(range(sample_size))
+        
+        train_df = pl.DataFrame({
+            "id": train_ids,
+            "emb": [v.astype("float32") for v in train_vectors],
+        })
+        log.info(f"Writing train_{int(percentage * 100)}p.parquet with {sample_size:,} vectors")
+        train_df.write_parquet(str(train_parquet))
+        
+        # Apply percentage sampling to test vectors
+        total_test = all_test_vectors.shape[0]
+        test_sample_size = int(total_test * percentage)
+        test_vectors = all_test_vectors[:test_sample_size]
+        test_ids = list(range(test_sample_size))
+        
+        test_df = pl.DataFrame({
+            "id": test_ids,
+            "emb": [v.astype("float32") for v in test_vectors],
+        })
+        log.info(f"Writing test_{int(percentage * 100)}p.parquet with {test_sample_size:,} vectors")
+        test_df.write_parquet(str(test_parquet))
 
 def deep1b_reader():
     return Deep1BReader()
