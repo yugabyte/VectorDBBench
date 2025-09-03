@@ -169,7 +169,7 @@ class AwsS3Reader(DatasetReader):
 
 
 # Default DEEP1B URL - can be overridden by DEEP1B_URL environment variable
-DEFAULT_DEEP1B_URL = "http://ann-benchmarks.com/deep-image-96-angular.hdf5"
+DEFAULT_DEEP1B_URL = "https://storage.yandexcloud.net/yandex-research/ann-datasets/DEEP/base.10M.fbin"
 
 # Get DEEP1B_URL from environment variable or use default
 DEEP1B_URL = os.getenv("DEEP1B_URL", DEFAULT_DEEP1B_URL)
