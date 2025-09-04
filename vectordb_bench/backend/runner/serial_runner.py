@@ -206,6 +206,12 @@ class SerialSearchRunner:
         log.info(f"{mp.current_process().name:14} start search the entire test_data to get recall and latency")
         with self.db.init():
             test_data, ground_truth = args
+            
+            # Check if ground_truth is None and handle gracefully
+            if ground_truth is None:
+                log.error("Ground truth data is None. Cannot perform search evaluation.")
+                raise ValueError("Ground truth data is None. Ensure ground truth files are available for the dataset.")
+            
             ideal_dcg = get_ideal_dcg(self.k)
 
             log.debug(f"test dataset size: {len(test_data)}")

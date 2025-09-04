@@ -272,6 +272,10 @@ class Deep1BReader(DatasetReader):
         if percentage <= 0.0 or percentage > 1.0:
             raise ValueError(f"DEEP1B_DATASET_PERCENTAGE must be between 0.0 and 1.0, got {percentage}")
         
+        # Check if ground truth files are requested (based on files parameter)
+        need_ground_truth = any(f.startswith('neighbors') for f in files)
+        log.info(f"Ground truth processing needed: {need_ground_truth} (based on requested files: {files})")
+        
         # Create percentage-specific filenames
         train_parquet = local_ds_root.joinpath(f"train_{int(percentage * 100)}p.parquet")
         test_parquet = local_ds_root.joinpath(f"test_{int(percentage * 100)}p.parquet")
@@ -283,7 +287,7 @@ class Deep1BReader(DatasetReader):
         
         if file_extension == '.fbin':
             # Handle .fbin files - special case with separate test and neighbors files
-            self._handle_fbin_with_separate_files(local_ds_root, train_parquet, test_parquet, neighbors_parquet, percentage)
+            self._handle_fbin_with_separate_files(local_ds_root, train_parquet, test_parquet, neighbors_parquet, percentage, need_ground_truth)
         else:
             # Handle other formats (HDF5) with single file download
             downloaded_file_path = local_ds_root.parent.joinpath(filename)
@@ -343,9 +347,9 @@ class Deep1BReader(DatasetReader):
             log.info(f"Writing test_{int(percentage * 100)}p.parquet with {test_sample_size:,} vectors")
             test_df.write_parquet(str(test_parquet))
     
-    def _handle_fbin_with_separate_files(self, local_ds_root: pathlib.Path, train_parquet: pathlib.Path, test_parquet: pathlib.Path, neighbors_parquet: pathlib.Path, percentage: float):
+    def _handle_fbin_with_separate_files(self, local_ds_root: pathlib.Path, train_parquet: pathlib.Path, test_parquet: pathlib.Path, neighbors_parquet: pathlib.Path, percentage: float, need_ground_truth: bool = True):
         """Handle .fbin files with separate train, test, and neighbors files"""
-        log.info("Processing .fbin format with separate test and neighbors files")
+        log.info(f"Processing .fbin format with separate test and neighbors files (ground_truth_needed={need_ground_truth})")
         
         # Extract filenames from URLs
         train_filename = get_filename_from_url(DEEP1B_URL)
@@ -367,9 +371,16 @@ class Deep1BReader(DatasetReader):
             log.info(f"Downloading test data {test_filename} from {FBIN_TEST_DATA_URL}")
             download_file(FBIN_TEST_DATA_URL, str(test_file_path))
         
-        if not neighbors_file_path.exists():
+        # Download neighbors file for ground truth data only if needed
+        if need_ground_truth and not neighbors_file_path.exists():
             log.info(f"Downloading neighbors data {neighbors_filename} from {FBIN_NEIGHBOURS_DATA_URL}")
-            download_file(FBIN_NEIGHBOURS_DATA_URL, str(neighbors_file_path))
+            try:
+                download_file(FBIN_NEIGHBOURS_DATA_URL, str(neighbors_file_path))
+            except Exception as e:
+                log.warning(f"Failed to download ground truth data: {e}")
+                log.warning("Continuing without ground truth data - accuracy metrics will not be available")
+        elif not need_ground_truth:
+            log.info("Skipping ground truth download as it's not needed for this dataset configuration")
         
         # Convert files to Parquet if not already done
         if not train_parquet.exists():
@@ -378,10 +389,25 @@ class Deep1BReader(DatasetReader):
         if not test_parquet.exists():
             self._convert_test_fbin_to_parquet(test_file_path, test_parquet, percentage)
         
-        if not neighbors_parquet.exists():
-            self._convert_neighbors_ibin_to_parquet(neighbors_file_path, neighbors_parquet, percentage)
+        # Convert neighbors file only if it's needed and was successfully downloaded
+        if need_ground_truth and not neighbors_parquet.exists() and neighbors_file_path.exists():
+            try:
+                self._convert_neighbors_ibin_to_parquet(neighbors_file_path, neighbors_parquet, percentage)
+                log.info(f"Successfully created ground truth file: {neighbors_parquet}")
+            except Exception as e:
+                log.warning(f"Failed to convert ground truth data: {e}")
+                log.warning("Continuing without ground truth data - accuracy metrics will not be available")
+        elif not need_ground_truth:
+            log.info("Skipping ground truth conversion as it's not needed for this dataset configuration")
         
-        log.info(f"FBIN dataset processing completed with {percentage*100}% of data")
+        # Log final status
+        if need_ground_truth:
+            if neighbors_parquet.exists():
+                log.info(f"FBIN dataset processing completed with {percentage*100}% of data. Ground truth available for accuracy metrics.")
+            else:
+                log.info(f"FBIN dataset processing completed with {percentage*100}% of data. No ground truth available - accuracy metrics will not be computed.")
+        else:
+            log.info(f"FBIN dataset processing completed with {percentage*100}% of data. Ground truth processing skipped by configuration.")
 
     def _convert_train_fbin_to_parquet(self, fbin_path: pathlib.Path, train_parquet: pathlib.Path, percentage: float):
         """Convert train .fbin file to Parquet format"""

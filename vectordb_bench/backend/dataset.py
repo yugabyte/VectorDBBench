@@ -164,7 +164,7 @@ class Deep1B(BaseDataset):
     dim: int = 96
     metric_type: MetricType = MetricType.L2
     use_shuffled: bool = False
-    with_gt: bool = False  # Deep1B doesn't have ground truth by default
+    with_gt: bool = True  # Deep1B has ground truth available for performance testing
     _size_label: dict = {
         1_000_000_000: SizeLabel(1_000_000_000, "LARGE", 100),
     }
@@ -271,6 +271,15 @@ class DatasetManager(BaseModel):
             # Update test_data for Deep1B with percentage-specific file
             if self.data_dir.joinpath(test_filename).exists():
                 self.test_data = self._read_file(test_filename)
+
+            # Update gt_data for Deep1B with percentage-specific file if ground truth is needed
+            if self.data.with_gt and gt_file is not None:
+                gt_filename_percentage = f"neighbors_{int(percentage * 100)}p.parquet"
+                if self.data_dir.joinpath(gt_filename_percentage).exists():
+                    self.gt_data = self._read_file(gt_filename_percentage)
+                elif self.data_dir.joinpath(gt_file).exists():
+                    # Fallback to the original gt_file if percentage-specific doesn't exist
+                    self.gt_data = self._read_file(gt_file)
 
             # Set train files for Deep1B
             self.train_files = [train_filename] if self.data_dir.joinpath(train_filename).exists() else []
