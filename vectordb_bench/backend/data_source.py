@@ -4,6 +4,7 @@ import typing
 from abc import ABC, abstractmethod
 from enum import Enum
 import struct
+import psutil
 
 from tqdm import tqdm
 
@@ -191,12 +192,58 @@ def get_filename_from_url(url: str) -> str:
     """Extract filename from URL"""
     return url.split("/")[-1]
 
-def read_fbin_file(file_path: pathlib.Path) -> np.ndarray:
+def check_available_memory() -> tuple[float, float]:
     """
-    Read .fbin format file and return vectors.
+    Check available system memory.
+    
+    Returns:
+        Tuple of (available_memory_gb, total_memory_gb)
+    """
+    try:
+        memory = psutil.virtual_memory()
+        available_gb = memory.available / (1024**3)
+        total_gb = memory.total / (1024**3)
+        return available_gb, total_gb
+    except Exception as e:
+        log.warning(f"Could not check system memory: {e}")
+        return 0.0, 0.0
+
+def validate_memory_requirements(required_gb: float) -> bool:
+    """
+    Validate if system has enough memory for the operation.
+    
+    Args:
+        required_gb: Required memory in GiB
+        
+    Returns:
+        True if sufficient memory is available, False otherwise
+    """
+    available_gb, total_gb = check_available_memory()
+    
+    if available_gb == 0.0:  # Could not check memory
+        log.warning("Could not determine available memory, proceeding with caution")
+        return True
+    
+    log.info(f"System memory: {available_gb:.2f} GiB available / {total_gb:.2f} GiB total")
+    
+    # Leave some headroom (use only 80% of available memory)
+    safe_memory = available_gb * 0.8
+    
+    if required_gb > safe_memory:
+        log.error(f"Insufficient memory: {required_gb:.2f} GiB required, only {safe_memory:.2f} GiB safely available")
+        log.error("Consider reducing DEEP1B_DATASET_PERCENTAGE or increasing system memory")
+        return False
+    
+    return True
+
+def read_fbin_file(file_path: pathlib.Path, percentage: float = 1.0, chunk_size: int = 1_000_000) -> np.ndarray:
+    """
+    Read .fbin format file and return vectors with memory-efficient chunked reading.
     
     Args:
         file_path: Path to the .fbin file
+        percentage: Percentage of data to read (0.0 to 1.0)
+        chunk_size: Number of vectors to read per chunk (default: 1M vectors)
         
     Returns:
         Numpy array of vectors
@@ -216,11 +263,60 @@ def read_fbin_file(file_path: pathlib.Path) -> np.ndarray:
         
         log.info(f"Found {num_vectors:,} vectors with {num_dimensions} dimensions in .fbin file")
         
-        # Read all vectors
-        vectors = np.fromfile(f, dtype=np.float32, count=num_vectors * num_dimensions)
-        vectors = vectors.reshape(num_vectors, num_dimensions)
+        # Calculate how many vectors to actually read based on percentage
+        vectors_to_read = int(num_vectors * percentage)
+        log.info(f"Will read {vectors_to_read:,} vectors ({percentage*100:.1f}% of dataset)")
         
-        return vectors
+        # Estimate memory requirement and validate against available memory
+        memory_gb = (vectors_to_read * num_dimensions * 4) / (1024**3)
+        log.info(f"Estimated memory requirement: {memory_gb:.2f} GiB")
+        
+        # Validate memory requirements
+        if not validate_memory_requirements(memory_gb):
+            raise MemoryError(
+                f"Insufficient memory to load {vectors_to_read:,} vectors requiring {memory_gb:.2f} GiB. "
+                f"Consider reducing DEEP1B_DATASET_PERCENTAGE (current: {percentage}) or increasing system memory."
+            )
+        
+        # Use chunked reading for memory efficiency
+        vectors_list = []
+        vectors_read = 0
+        
+        while vectors_read < vectors_to_read:
+            # Calculate how many vectors to read in this chunk
+            current_chunk_size = min(chunk_size, vectors_to_read - vectors_read)
+            elements_to_read = current_chunk_size * num_dimensions
+            
+            # Read chunk
+            chunk = np.fromfile(f, dtype=np.float32, count=elements_to_read)
+            if len(chunk) == 0:  # End of file
+                break
+                
+            # Reshape and add to list
+            actual_vectors_in_chunk = len(chunk) // num_dimensions
+            if len(chunk) % num_dimensions != 0:
+                # Partial vector at end, truncate
+                chunk = chunk[:actual_vectors_in_chunk * num_dimensions]
+            
+            chunk_reshaped = chunk.reshape(actual_vectors_in_chunk, num_dimensions)
+            vectors_list.append(chunk_reshaped)
+            
+            vectors_read += actual_vectors_in_chunk
+            log.info(f"Read chunk: {actual_vectors_in_chunk:,} vectors ({vectors_read:,}/{vectors_to_read:,} total)")
+            
+            if actual_vectors_in_chunk < current_chunk_size:
+                # We've reached the end of the file
+                break
+        
+        # Concatenate all chunks
+        if vectors_list:
+            log.info(f"Concatenating {len(vectors_list)} chunks...")
+            vectors = np.vstack(vectors_list)
+            log.info(f"Successfully loaded {vectors.shape[0]:,} vectors with {vectors.shape[1]} dimensions")
+            return vectors
+        else:
+            log.warning("No vectors were read from the file")
+            return np.empty((0, num_dimensions), dtype=np.float32)
 
 def read_ibin_file(file_path: pathlib.Path) -> np.ndarray:
     """
@@ -414,13 +510,10 @@ class Deep1BReader(DatasetReader):
         """Convert train .fbin file to Parquet format"""
         log.info(f"Converting train .fbin file: {fbin_path}")
         
-        # Read the .fbin file (no longer splits - just returns all vectors)
-        all_vectors = read_fbin_file(fbin_path)
+        # Read the .fbin file with percentage directly applied during reading for memory efficiency
+        train_vectors = read_fbin_file(fbin_path, percentage=percentage)
         
-        # Apply percentage sampling to training vectors
-        total_vectors = all_vectors.shape[0]
-        sample_size = int(total_vectors * percentage)
-        train_vectors = all_vectors[:sample_size]
+        sample_size = train_vectors.shape[0]
         train_ids = list(range(sample_size))
         
         train_df = pl.DataFrame({
@@ -434,13 +527,10 @@ class Deep1BReader(DatasetReader):
         """Convert test .fbin file to Parquet format"""
         log.info(f"Converting test .fbin file: {fbin_path}")
         
-        # Read the test .fbin file
-        all_test_vectors = read_fbin_file(fbin_path)
+        # Read the test .fbin file with percentage directly applied during reading for memory efficiency
+        test_vectors = read_fbin_file(fbin_path, percentage=percentage)
         
-        # Apply percentage sampling to test vectors
-        total_test = all_test_vectors.shape[0]
-        test_sample_size = int(total_test * percentage)
-        test_vectors = all_test_vectors[:test_sample_size]
+        test_sample_size = test_vectors.shape[0]
         test_ids = list(range(test_sample_size))
         
         test_df = pl.DataFrame({
