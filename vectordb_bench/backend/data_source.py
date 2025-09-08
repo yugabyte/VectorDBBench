@@ -169,7 +169,8 @@ class AwsS3Reader(DatasetReader):
 
 
 # Default DEEP1B URL - can be overridden by DEEP1B_URL environment variable
-DEFAULT_DEEP1B_URL = "https://storage.yandexcloud.net/yandex-research/ann-datasets/DEEP/base.10M.fbin"
+# DEFAULT_DEEP1B_URL = "https://storage.yandexcloud.net/yandex-research/ann-datasets/DEEP/base.10M.fbin"
+DEFAULT_DEEP1B_URL = "https://storage.yandexcloud.net/yandex-research/ann-datasets/DEEP/learn.350M.fbin"
 FBIN_TEST_DATA_URL = "https://storage.yandexcloud.net/yandex-research/ann-datasets/DEEP/query.public.10K.fbin"
 FBIN_NEIGHBOURS_DATA_URL = "https://storage.yandexcloud.net/yandex-research/ann-datasets/DEEP/groundtruth.public.10K.ibin"
 
