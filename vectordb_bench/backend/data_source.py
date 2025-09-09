@@ -22,6 +22,7 @@ class DatasetSource(Enum):
     S3 = "S3"
     AliyunOSS = "AliyunOSS"
     Deep1BLocal = "Deep1BLocal"
+    Deep1BS3 = "Deep1BS3"
 
     def reader(self) -> DatasetReader:
         if self == DatasetSource.S3:
@@ -32,6 +33,9 @@ class DatasetSource(Enum):
 
         if self == DatasetSource.Deep1BLocal:
             return Deep1BReader()
+
+        if self == DatasetSource.Deep1BS3:
+            return Deep1BS3Reader()
 
         return None
 
@@ -231,6 +235,99 @@ class Deep1BReader(DatasetReader):
             log.info(f"Using existing Deep1B dataset files with {percentage*100}% of data")
         
         log.info(f"Deep1B dataset preparation completed with {percentage*100}% of data. Note: No ground truth file is provided.")
+
+class Deep1BS3Reader(DatasetReader):
+    source: DatasetSource = DatasetSource.Deep1BS3
+    remote_root: str = "s3://perf-team/vectordbbench/deep1b/parquet/1b/"
+
+    def __init__(self):
+        import s3fs
+        # Use AWS credentials from ~/.aws profile
+        self.fs = s3fs.S3FileSystem(anon=False)
+
+    def validate_file(self, remote: pathlib.Path, local: pathlib.Path) -> bool:
+        """Validate if local file matches remote file"""
+        try:
+            info = self.fs.info(remote.as_posix())
+            remote_size = info.get("size")
+            if not local.exists():
+                return False
+            local_size = local.stat().st_size
+            if remote_size != local_size:
+                log.info(f"local file: {local} size[{local_size}] not match with remote size[{remote_size}]")
+                return False
+            return True
+        except Exception as e:
+            log.warning(f"Could not validate file {remote}: {e}")
+            return False
+
+    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path, deep1b_dataset_percentage: float | None = None):
+        """Download Deep1B dataset files from S3 based on percentage - PGVECTOR ONLY"""
+        log.info("Deep1B S3 dataset is specifically designed for pgvector databases")
+        
+        if not local_ds_root.exists():
+            log.info(f"local dataset root path not exist, creating it: {local_ds_root}")
+            local_ds_root.mkdir(parents=True)
+
+        # Get the percentage configuration
+        percentage = deep1b_dataset_percentage if deep1b_dataset_percentage is not None else config.DEEP1B_DATASET_PERCENTAGE
+        log.info(f"Deep1B S3: Using {percentage*100}% of dataset from {self.remote_root}")
+        
+        if percentage <= 0.0 or percentage > 1.0:
+            raise ValueError(f"DEEP1B_DATASET_PERCENTAGE must be between 0.0 and 1.0, got {percentage}")
+
+        # Calculate how many training files to download (0-99, total 100 files)
+        total_train_files = 100
+        files_to_download = max(1, int(total_train_files * percentage))
+        log.info(f"Will download {files_to_download} out of {total_train_files} training files")
+
+        downloads = []
+
+        # Handle training files (learn_split_<number>.parquet)
+        for i in range(files_to_download):
+            remote_file = f"learn_split_{i}.parquet"
+            local_file = local_ds_root.joinpath(remote_file)
+            remote_path = pathlib.PurePosixPath(self.remote_root + remote_file)
+            
+            if not local_file.exists() or not self.validate_file(remote_path, local_file):
+                log.info(f"Adding training file to download: {remote_file}")
+                downloads.append((remote_path.as_posix(), local_file))
+
+        # Handle test.parquet file
+        test_file = "test.parquet"
+        local_test = local_ds_root.joinpath(test_file)
+        remote_test = pathlib.PurePosixPath(self.remote_root + test_file)
+        
+        if not local_test.exists() or not self.validate_file(remote_test, local_test):
+            log.info(f"Adding test file to download: {test_file}")
+            downloads.append((remote_test.as_posix(), local_test))
+
+        # Handle neighbours.parquet file if requested (for ground truth)
+        if any(f.startswith('neighbors') for f in files):
+            neighbors_file = "neighbours.parquet"
+            local_neighbors = local_ds_root.joinpath(neighbors_file)
+            remote_neighbors = pathlib.PurePosixPath(self.remote_root + neighbors_file)
+            
+            if not local_neighbors.exists() or not self.validate_file(remote_neighbors, local_neighbors):
+                log.info(f"Adding neighbors file to download: {neighbors_file}")
+                downloads.append((remote_neighbors.as_posix(), local_neighbors))
+
+        if len(downloads) == 0:
+            log.info("All files are already present and validated")
+            return
+
+        log.info(f"Start downloading {len(downloads)} files from S3")
+        for remote_path, local_file in tqdm(downloads):
+            log.debug(f"downloading file {remote_path} to {local_file}")
+            try:
+                self.fs.download(remote_path, local_file.as_posix())
+                log.debug(f"Successfully downloaded {remote_path}")
+            except Exception as e:
+                log.error(f"Failed to download {remote_path}: {e}")
+                raise
+
+        log.info(f"Successfully downloaded {len(downloads)} files from S3")
+
 
 def deep1b_reader():
     return Deep1BReader()

@@ -164,7 +164,7 @@ class Deep1B(BaseDataset):
     dim: int = 96
     metric_type: MetricType = MetricType.L2
     use_shuffled: bool = False
-    with_gt: bool = False  # Deep1B doesn't have ground truth by default
+    with_gt: bool = True  # S3 version has ground truth (neighbours.parquet)
     _size_label: dict = {
         1_000_000_000: SizeLabel(1_000_000_000, "LARGE", 100),
     }
@@ -242,9 +242,17 @@ class DatasetManager(BaseModel):
             gt_file, test_file = utils.compose_gt_file(filters), "test.parquet"
             all_files.extend([gt_file, test_file])
 
-        # Use Deep1BReader for Deep1B dataset
+        # Determine which reader to use for Deep1B
+        deep1b_reader_source = None
         if self.data.name == "Deep1B":
-            DatasetSource.Deep1BLocal.reader().read(
+            # Use S3 reader by default, fallback to local reader
+            deep1b_reader_source = DatasetSource.Deep1BS3 if source != DatasetSource.Deep1BLocal else DatasetSource.Deep1BLocal
+            
+            # Validate that S3 source is only used with compatible context
+            if deep1b_reader_source == DatasetSource.Deep1BS3:
+                log.info("Using Deep1B S3 dataset - optimized for pgvector databases")
+            
+            deep1b_reader_source.reader().read(
                 dataset=self.data.dir_name.lower(),
                 files=all_files,
                 local_ds_root=self.data_dir,
@@ -257,23 +265,35 @@ class DatasetManager(BaseModel):
                 local_ds_root=self.data_dir,
             )
 
-        if gt_file is not None and test_file is not None:
+        # Handle standard test and ground truth files (for non-Deep1B datasets)
+        if gt_file is not None and test_file is not None and self.data.name != "Deep1B":
             self.test_data = self._read_file(test_file)
             self.gt_data = self._read_file(gt_file)
 
-        # Handle Deep1B percentage-specific filenames
+        # Handle Deep1B files
         if self.data.name == "Deep1B":
-            # Use the passed parameter if available, otherwise use config
-            percentage = deep1b_dataset_percentage if deep1b_dataset_percentage is not None else config.DEEP1B_DATASET_PERCENTAGE
-            train_filename = f"train_{int(percentage * 100)}p.parquet"
-            test_filename = f"test_{int(percentage * 100)}p.parquet"
+            # Check if we're using S3 (multiple files) or local (single percentage file)
+            if deep1b_reader_source == DatasetSource.Deep1BS3:
+                # S3 version: multiple learn_split_<number>.parquet files
+                self.train_files = sorted([f.name for f in self.data_dir.glob("learn_split_*.parquet")])
+                # Use test.parquet directly from S3
+                if self.data_dir.joinpath("test.parquet").exists():
+                    self.test_data = self._read_file("test.parquet")
+                # Use neighbours.parquet for ground truth if available
+                if self.data_dir.joinpath("neighbours.parquet").exists():
+                    self.gt_data = self._read_file("neighbours.parquet")
+            else:
+                # Local version: percentage-specific filenames
+                percentage = deep1b_dataset_percentage if deep1b_dataset_percentage is not None else config.DEEP1B_DATASET_PERCENTAGE
+                train_filename = f"train_{int(percentage * 100)}p.parquet"
+                test_filename = f"test_{int(percentage * 100)}p.parquet"
 
-            # Update test_data for Deep1B with percentage-specific file
-            if self.data_dir.joinpath(test_filename).exists():
-                self.test_data = self._read_file(test_filename)
+                # Update test_data for Deep1B with percentage-specific file
+                if self.data_dir.joinpath(test_filename).exists():
+                    self.test_data = self._read_file(test_filename)
 
-            # Set train files for Deep1B
-            self.train_files = [train_filename] if self.data_dir.joinpath(train_filename).exists() else []
+                # Set train files for Deep1B
+                self.train_files = [train_filename] if self.data_dir.joinpath(train_filename).exists() else []
         else:
             prefix = "shuffle_train" if use_shuffled else "train"
             self.train_files = sorted([f.name for f in self.data_dir.glob(f"{prefix}*.parquet")])

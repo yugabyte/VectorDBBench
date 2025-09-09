@@ -90,6 +90,8 @@ UI_CASE_CLUSTERS: list[UICaseItemCluster] = [
             UICaseItem(case_id=CaseType.Performance1536D5M),
             UICaseItem(case_id=CaseType.Performance1536D500K),
             UICaseItem(case_id=CaseType.Performance1536D50K),
+            UICaseItem(isLine=True),
+            UICaseItem(case_id=CaseType.Performance96D1B),
         ],
     ),
     UICaseItemCluster(
@@ -123,6 +125,7 @@ DISPLAY_CASE_ORDER: list[CaseType] = [
     CaseType.Performance1536D5M,
     CaseType.Performance1536D500K,
     CaseType.Performance1536D50K,
+    CaseType.Performance96D1B,
     CaseType.Performance768D10M1P,
     CaseType.Performance768D1M1P,
     CaseType.Performance1536D5M1P,
