@@ -164,7 +164,7 @@ class Deep1B(BaseDataset):
     dim: int = 96
     metric_type: MetricType = MetricType.L2
     use_shuffled: bool = False
-    with_gt: bool = True  # S3 version has ground truth (neighbours.parquet)
+    with_gt: bool = True  # S3 version has ground truth (neighbors.parquet)
     _size_label: dict = {
         1_000_000_000: SizeLabel(1_000_000_000, "LARGE", 100),
     }
@@ -274,14 +274,14 @@ class DatasetManager(BaseModel):
         if self.data.name == "Deep1B":
             # Check if we're using S3 (multiple files) or local (single percentage file)
             if deep1b_reader_source == DatasetSource.Deep1BS3:
-                # S3 version: multiple learn_split_<number>.parquet files
-                self.train_files = sorted([f.name for f in self.data_dir.glob("learn_split_*.parquet")])
+                # S3 version: multiple train_<number>.parquet files
+                self.train_files = sorted([f.name for f in self.data_dir.glob("train_*.parquet")])
                 # Use test.parquet directly from S3
                 if self.data_dir.joinpath("test.parquet").exists():
                     self.test_data = self._read_file("test.parquet")
-                # Use neighbours.parquet for ground truth if available
-                if self.data_dir.joinpath("neighbours.parquet").exists():
-                    self.gt_data = self._read_file("neighbours.parquet")
+                # Use neighbors.parquet for ground truth if available
+                if self.data_dir.joinpath("neighbors.parquet").exists():
+                    self.gt_data = self._read_file("neighbors.parquet")
             else:
                 # Local version: percentage-specific filenames
                 percentage = deep1b_dataset_percentage if deep1b_dataset_percentage is not None else config.DEEP1B_DATASET_PERCENTAGE

@@ -244,11 +244,25 @@ class Deep1BS3Reader(DatasetReader):
         import s3fs
         # Use AWS credentials from ~/.aws profile
         self.fs = s3fs.S3FileSystem(anon=False)
+    
+    def _strip_s3_prefix(self, path: str) -> str:
+        """Remove s3:// prefix from path for s3fs operations"""
+        if path.startswith("s3://"):
+            return path[5:]  # Remove 's3://' prefix
+        return path
+    
+    def _build_remote_path(self, filename: str) -> str:
+        """Build proper remote path by joining remote_root with filename"""
+        # Ensure remote_root ends with / and build proper path
+        root = self.remote_root.rstrip('/') + '/'
+        return root + filename
 
-    def validate_file(self, remote: pathlib.Path, local: pathlib.Path) -> bool:
+    def validate_file(self, remote: str, local: pathlib.Path) -> bool:
         """Validate if local file matches remote file"""
         try:
-            info = self.fs.info(remote.as_posix())
+            # Strip s3 prefix from remote path string
+            s3_path = self._strip_s3_prefix(remote)
+            info = self.fs.info(s3_path)
             remote_size = info.get("size")
             if not local.exists():
                 return False
@@ -283,47 +297,50 @@ class Deep1BS3Reader(DatasetReader):
 
         downloads = []
 
-        # Handle training files (learn_split_<number>.parquet)
+        # Handle training files (train_<number>.parquet)
         for i in range(files_to_download):
-            remote_file = f"learn_split_{i}.parquet"
+            remote_file = f"train_{i}.parquet"
             local_file = local_ds_root.joinpath(remote_file)
-            remote_path = pathlib.PurePosixPath(self.remote_root + remote_file)
+            remote_path_str = self._build_remote_path(remote_file)
             
-            if not local_file.exists() or not self.validate_file(remote_path, local_file):
+            if not local_file.exists() or not self.validate_file(remote_path_str, local_file):
                 log.info(f"Adding training file to download: {remote_file}")
-                downloads.append((remote_path.as_posix(), local_file))
+                s3_path = self._strip_s3_prefix(remote_path_str)
+                downloads.append((s3_path, local_file))
 
         # Handle test.parquet file
         test_file = "test.parquet"
         local_test = local_ds_root.joinpath(test_file)
-        remote_test = pathlib.PurePosixPath(self.remote_root + test_file)
+        remote_test_str = self._build_remote_path(test_file)
         
-        if not local_test.exists() or not self.validate_file(remote_test, local_test):
+        if not local_test.exists() or not self.validate_file(remote_test_str, local_test):
             log.info(f"Adding test file to download: {test_file}")
-            downloads.append((remote_test.as_posix(), local_test))
+            s3_path = self._strip_s3_prefix(remote_test_str)
+            downloads.append((s3_path, local_test))
 
-        # Handle neighbours.parquet file if requested (for ground truth)
+        # Handle neighbors.parquet file if requested (for ground truth)
         if any(f.startswith('neighbors') for f in files):
-            neighbors_file = "neighbours.parquet"
+            neighbors_file = "neighbors.parquet"
             local_neighbors = local_ds_root.joinpath(neighbors_file)
-            remote_neighbors = pathlib.PurePosixPath(self.remote_root + neighbors_file)
+            remote_neighbors_str = self._build_remote_path(neighbors_file)
             
-            if not local_neighbors.exists() or not self.validate_file(remote_neighbors, local_neighbors):
+            if not local_neighbors.exists() or not self.validate_file(remote_neighbors_str, local_neighbors):
                 log.info(f"Adding neighbors file to download: {neighbors_file}")
-                downloads.append((remote_neighbors.as_posix(), local_neighbors))
+                s3_path = self._strip_s3_prefix(remote_neighbors_str)
+                downloads.append((s3_path, local_neighbors))
 
         if len(downloads) == 0:
             log.info("All files are already present and validated")
             return
 
         log.info(f"Start downloading {len(downloads)} files from S3")
-        for remote_path, local_file in tqdm(downloads):
-            log.debug(f"downloading file {remote_path} to {local_file}")
+        for s3_path, local_file in tqdm(downloads):
+            log.debug(f"downloading file {s3_path} to {local_file}")
             try:
-                self.fs.download(remote_path, local_file.as_posix())
-                log.debug(f"Successfully downloaded {remote_path}")
+                self.fs.download(s3_path, local_file.as_posix())
+                log.debug(f"Successfully downloaded {s3_path}")
             except Exception as e:
-                log.error(f"Failed to download {remote_path}: {e}")
+                log.error(f"Failed to download {s3_path}: {e}")
                 raise
 
         log.info(f"Successfully downloaded {len(downloads)} files from S3")
