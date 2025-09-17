@@ -219,6 +219,7 @@ class DatasetManager(BaseModel):
         source: DatasetSource = DatasetSource.S3,
         filters: float | str | None = None,
         deep1b_dataset_percentage: float | None = None,
+        skip_load: bool = False,
     ) -> bool:
         """Download the dataset from DatasetSource
          url = f"{source}/{self.data.dir_name}"
@@ -227,6 +228,7 @@ class DatasetManager(BaseModel):
             source(DatasetSource): S3 or AliyunOSS, default as S3
             filters(Optional[int | float | str]): combined with dataset's with_gt to
               compose the correct ground_truth file
+            skip_load(bool): whether load phase is skipped - for optimization
 
         Returns:
             bool: whether the dataset is successfully prepared
@@ -257,6 +259,7 @@ class DatasetManager(BaseModel):
                 files=all_files,
                 local_ds_root=self.data_dir,
                 deep1b_dataset_percentage=deep1b_dataset_percentage,
+                skip_load=skip_load,
             )
         elif not self.data.is_custom:
             source.reader().read(

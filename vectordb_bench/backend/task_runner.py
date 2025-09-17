@@ -96,10 +96,14 @@ class CaseRunner(BaseModel):
     def _pre_run(self, drop_old: bool = True):
         try:
             self.init_db(drop_old)
+            # Check if load stage is skipped
+            skip_load = TaskStage.LOAD not in self.config.stages
+            
             self.ca.dataset.prepare(
                 self.dataset_source,
                 filters=self.ca.filter_rate,
                 deep1b_dataset_percentage=self.config.deep1b_dataset_percentage,
+                skip_load=skip_load,
             )
         except ModuleNotFoundError as e:
             log.warning(f"pre run case error: please install client for db: {self.config.db}, error={e}")

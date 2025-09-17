@@ -45,7 +45,7 @@ class DatasetReader(ABC):
     remote_root: str
 
     @abstractmethod
-    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path, deep1b_dataset_percentage: float | None = None):
+    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path, deep1b_dataset_percentage: float | None = None, skip_load: bool = False):
         """read dataset files from remote_root to local_ds_root,
 
         Args:
@@ -53,6 +53,7 @@ class DatasetReader(ABC):
             files(list[str]):  all filenames of the dataset
             local_ds_root(pathlib.Path): whether to write the remote data.
             deep1b_dataset_percentage(float | None): percentage of Deep1B dataset to use (only for Deep1B)
+            skip_load(bool): whether load phase is skipped - for optimization
         """
 
     @abstractmethod
@@ -80,7 +81,7 @@ class AliyunOSSReader(DatasetReader):
 
         return True
 
-    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path, deep1b_dataset_percentage: float | None = None):
+    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path, deep1b_dataset_percentage: float | None = None, skip_load: bool = False):
         downloads = []
         if not local_ds_root.exists():
             log.info(f"local dataset root path not exist, creating it: {local_ds_root}")
@@ -130,7 +131,7 @@ class AwsS3Reader(DatasetReader):
             log.info(n)
         return names
 
-    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path, deep1b_dataset_percentage: float | None = None):
+    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path, deep1b_dataset_percentage: float | None = None, skip_load: bool = False):
         downloads = []
         if not local_ds_root.exists():
             log.info(f"local dataset root path not exist, creating it: {local_ds_root}")
@@ -179,7 +180,7 @@ class Deep1BReader(DatasetReader):
     def validate_file(self, remote: pathlib.Path, local: pathlib.Path) -> bool:
         return local.exists() and local.stat().st_size > 0
 
-    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path, deep1b_dataset_percentage: float | None = None):
+    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path, deep1b_dataset_percentage: float | None = None, skip_load: bool = False):
         # Download the HDF5 file if not present
         hdf5_path = local_ds_root.parent.joinpath(DEEP1B_HDF5_FILENAME)
         if not hdf5_path.exists():
@@ -275,9 +276,12 @@ class Deep1BS3Reader(DatasetReader):
             log.warning(f"Could not validate file {remote}: {e}")
             return False
 
-    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path, deep1b_dataset_percentage: float | None = None):
+    def read(self, dataset: str, files: list[str], local_ds_root: pathlib.Path, deep1b_dataset_percentage: float | None = None, skip_load: bool = False):
         """Download Deep1B dataset files from S3 based on percentage - PGVECTOR ONLY"""
         log.info("Deep1B S3 dataset is specifically designed for pgvector databases")
+        
+        if skip_load:
+            log.info("Load phase is skipped - only downloading test and neighbors files for search operations")
         
         if not local_ds_root.exists():
             log.info(f"local dataset root path not exist, creating it: {local_ds_root}")
@@ -290,23 +294,26 @@ class Deep1BS3Reader(DatasetReader):
         if percentage <= 0.0 or percentage > 1.0:
             raise ValueError(f"DEEP1B_DATASET_PERCENTAGE must be between 0.0 and 1.0, got {percentage}")
 
-        # Calculate how many training files to download (0-99, total 100 files)
-        total_train_files = 100
-        files_to_download = max(1, int(total_train_files * percentage))
-        log.info(f"Will download {files_to_download} out of {total_train_files} training files")
-
         downloads = []
 
-        # Handle training files (train_<number>.parquet)
-        for i in range(files_to_download):
-            remote_file = f"train_{i}.parquet"
-            local_file = local_ds_root.joinpath(remote_file)
-            remote_path_str = self._build_remote_path(remote_file)
-            
-            if not local_file.exists() or not self.validate_file(remote_path_str, local_file):
-                log.info(f"Adding training file to download: {remote_file}")
-                s3_path = self._strip_s3_prefix(remote_path_str)
-                downloads.append((s3_path, local_file))
+        # Handle training files (train_<number>.parquet) - skip if load is skipped
+        if not skip_load:
+            # Calculate how many training files to download (0-99, total 100 files)
+            total_train_files = 100
+            files_to_download = max(1, int(total_train_files * percentage))
+            log.info(f"Will download {files_to_download} out of {total_train_files} training files")
+
+            for i in range(files_to_download):
+                remote_file = f"train_{i}.parquet"
+                local_file = local_ds_root.joinpath(remote_file)
+                remote_path_str = self._build_remote_path(remote_file)
+                
+                if not local_file.exists() or not self.validate_file(remote_path_str, local_file):
+                    log.info(f"Adding training file to download: {remote_file}")
+                    s3_path = self._strip_s3_prefix(remote_path_str)
+                    downloads.append((s3_path, local_file))
+        else:
+            log.info("Skipping training files download since load phase is skipped")
 
         # Handle test.parquet file
         test_file = "test.parquet"
