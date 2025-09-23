@@ -58,18 +58,20 @@ def process_chunk_worker(args):
         start_time = time.time()
         
         # Calculate file offset (skip 8-byte header + previous vectors)
-        header_size = 8  # 2 int32 values
-        vector_size = dimensions * 4  # 4 bytes per float32
-        file_offset = header_size + (start_vector * vector_size)
+        # Use int64 to prevent overflow with large files
+        header_size = np.int64(8)  # 2 int32 values
+        vector_size = np.int64(dimensions) * np.int64(4)  # 4 bytes per float32
+        file_offset = header_size + (np.int64(start_vector) * vector_size)
         
         # Read the specific chunk of vectors
         with open(input_fbin_file, 'rb') as f:
-            f.seek(file_offset)
-            chunk_data = f.read(num_vectors * vector_size)
+            f.seek(int(file_offset))  # Convert to int for seek()
+            read_size = np.int64(num_vectors) * vector_size
+            chunk_data = f.read(int(read_size))  # Convert to int for read()
         
-        if not chunk_data or len(chunk_data) < num_vectors * vector_size:
+        if not chunk_data or len(chunk_data) < int(read_size):
             # Handle partial reads at end of file
-            actual_vectors = len(chunk_data) // vector_size
+            actual_vectors = len(chunk_data) // int(vector_size)
             if actual_vectors == 0:
                 return None
             num_vectors = actual_vectors
@@ -131,6 +133,9 @@ def fbin_to_parquet_parallel(input_fbin_file, output_prefix, chunk_size_vectors=
         # Read fbin header to get nvecs and dimensions
         with open(input_fbin_file, 'rb') as f:
             nvecs, dim = np.fromfile(f, count=2, dtype=np.int32)
+            # Convert to int64 to handle large numbers safely
+            nvecs = np.int64(nvecs)
+            dim = np.int64(dim)
             
         # Use dimensions from header if not provided
         if dimensions is None:
@@ -179,8 +184,8 @@ def fbin_to_parquet_parallel(input_fbin_file, output_prefix, chunk_size_vectors=
         # Prepare work items for parallel processing
         work_items = []
         for chunk_id in range(total_chunks):
-            start_vector = chunk_id * chunk_size_vectors
-            num_vectors = min(chunk_size_vectors, total_vectors - start_vector)
+            start_vector = np.int64(chunk_id) * np.int64(chunk_size_vectors)
+            num_vectors = min(np.int64(chunk_size_vectors), total_vectors - start_vector)
             output_file = os.path.join(output_dir, f"{output_prefix}_{chunk_id}.parquet")
             
             work_items.append((
@@ -410,7 +415,7 @@ if __name__ == "__main__":
     # fbin_to_parquet_chunked_with_id('base.1B.fbin', 'train')
     
     # Convert test data (10K query vectors)
-    fbin_to_test_parquet('query.public.10K.fbin', 'test.parquet')
+    #fbin_to_test_parquet('query.public.10K.fbin', 'test.parquet')
     
     # Convert neighbors data (10K ground truth neighbor lists)
-    ibin_to_neighbors_parquet('groundtruth.public.10K.ibin', 'neighbors.parquet')
+    #ibin_to_neighbors_parquet('groundtruth.public.10K.ibin', 'neighbors.parquet')
