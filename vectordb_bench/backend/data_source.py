@@ -239,7 +239,7 @@ class Deep1BReader(DatasetReader):
 
 class Deep1BS3Reader(DatasetReader):
     source: DatasetSource = DatasetSource.Deep1BS3
-    remote_root: str = "s3://perf-team/vectordbbench/deep1b/parquet/1b/"
+    remote_root: str = "s3://perf-team/vectordbbench/deep1b/parquet1/"
 
     def __init__(self):
         import s3fs

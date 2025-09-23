@@ -28,7 +28,7 @@ Use the `deep1b_dataset_percentage` parameter to control how much of the dataset
 
 ### AWS Credentials
 
-The S3 reader uses AWS credentials from `~/.aws/` directory. Ensure your AWS profile has access to the `s3://perf-team/vectordbbench/deep1b/parquet/1b/` bucket.
+The S3 reader uses AWS credentials from `~/.aws/` directory. Ensure your AWS profile has access to the `s3://perf-team/vectordbbench/deep1b/parquet1/` bucket.
 
 ## Usage
 
