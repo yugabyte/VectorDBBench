@@ -14,7 +14,7 @@ from . import utils
 from .cases import Case, CaseLabel
 from .clients import MetricType, api
 from .data_source import DatasetSource
-from .runner import MultiProcessingSearchRunner, SerialInsertRunner, SerialSearchRunner
+from .runner import MultiProcessingSearchRunner, SerialInsertRunner, SerialSearchRunner, MultiProcessingInsertRunner
 
 log = logging.getLogger(__name__)
 
@@ -199,12 +199,24 @@ class CaseRunner(BaseModel):
     def _load_train_data(self):
         """Insert train data and get the insert_duration"""
         try:
-            runner = SerialInsertRunner(
-                self.db,
-                self.ca.dataset,
-                self.normalize,
-                self.ca.load_timeout,
-            )
+            # Use parallel loading for Deep1B dataset with multiple files
+            if (self.ca.dataset.data.name == "Deep1B" and 
+                len(self.ca.dataset.train_files) > 1):
+                log.info(f"Using parallel loading for Deep1B dataset with {len(self.ca.dataset.train_files)} files")
+                runner = MultiProcessingInsertRunner(
+                    self.db,
+                    self.ca.dataset,
+                    self.normalize,
+                    self.ca.load_timeout,
+                )
+            else:
+                # Use serial loading for other datasets or single-file Deep1B
+                runner = SerialInsertRunner(
+                    self.db,
+                    self.ca.dataset,
+                    self.normalize,
+                    self.ca.load_timeout,
+                )
             count = runner.run()
             return count
         except Exception as e:
