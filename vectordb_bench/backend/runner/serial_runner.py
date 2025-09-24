@@ -267,3 +267,162 @@ class SerialSearchRunner:
 
         """
         return self._run_in_subprocess()
+
+
+class MultiProcessingInsertRunner:
+    """Parallel insertion runner for Deep1B dataset using multiple processes"""
+    
+    def __init__(
+        self,
+        db: api.VectorDB,
+        dataset: DatasetManager,
+        normalize: bool = False,
+        timeout: float | None = None,
+        max_workers: int | None = None,
+    ):
+        self.dataset = dataset
+        self.db = db
+        self.normalize = normalize
+        self.timeout = timeout
+        # Use Deep1B specific worker count or fall back to config
+        self.max_workers = max_workers or config.DEEP1B_LOAD_WORKERS
+        
+    @staticmethod
+    def _load_single_file(db_config: dict, file_path: str, data_dir: str, normalize: bool) -> tuple[int, float]:
+        """Worker function to load a single parquet file"""
+        import pathlib
+        import time
+        from pyarrow import ParquetFile
+        import numpy as np
+        from vectordb_bench.backend.clients import api
+        
+        log.info(f"[Worker {mp.current_process().name}] Starting to load file: {file_path}")
+        start_time = time.perf_counter()
+        
+        try:
+            # Initialize database connection for this worker
+            # Create a copy to avoid modifying the original config
+            db_params = db_config['db_params'].copy()
+            db = db_config['db_class'](**db_params)
+            
+            full_path = pathlib.Path(data_dir) / file_path
+            if not full_path.exists():
+                log.error(f"File not found: {full_path}")
+                return 0, 0.0
+                
+            # Get batch size for Deep1B
+            batch_size = 1_000_000  # Deep1B uses larger batches
+            
+            with db.init():
+                count = 0
+                # Use ParquetFile with memory mapping for efficiency
+                parquet_file = ParquetFile(full_path, memory_map=True, pre_buffer=True)
+                
+                for batch in parquet_file.iter_batches(batch_size):
+                    data_df = batch.to_pandas()
+                    all_metadata = data_df["id"].tolist()
+                    
+                    emb_np = np.stack(data_df["emb"])
+                    if normalize:
+                        all_embeddings = (emb_np / np.linalg.norm(emb_np, axis=1)[:, np.newaxis]).tolist()
+                    else:
+                        all_embeddings = emb_np.tolist()
+                    del emb_np
+                    
+                    # Insert with retry logic
+                    retry_count = 0
+                    while retry_count < LOAD_MAX_TRY_COUNT:
+                        insert_count, error = db.insert_embeddings(
+                            embeddings=all_embeddings,
+                            metadata=all_metadata,
+                        )
+                        if error is not None:
+                            retry_count += 1
+                            time.sleep(WAITTING_TIME)
+                            log.warning(f"[Worker {mp.current_process().name}] Failed to insert data from {file_path}, retry {retry_count}")
+                            if retry_count >= LOAD_MAX_TRY_COUNT:
+                                raise error
+                        else:
+                            break
+                    
+                    count += insert_count
+                    log.debug(f"[Worker {mp.current_process().name}] Loaded {count} embeddings from {file_path}")
+                
+            duration = time.perf_counter() - start_time
+            log.info(f"[Worker {mp.current_process().name}] Completed loading {file_path}: {count:,} embeddings in {duration:.2f}s")
+            return count, duration
+            
+        except Exception as e:
+            duration = time.perf_counter() - start_time
+            log.error(f"[Worker {mp.current_process().name}] Failed to load {file_path}: {e}")
+            raise e
+    
+    def run(self) -> int:
+        """Run parallel loading for Deep1B dataset"""
+        if self.dataset.data.name != "Deep1B":
+            log.warning("MultiProcessingInsertRunner is optimized for Deep1B dataset. Using serial loading for other datasets.")
+            # Fall back to serial loading for non-Deep1B datasets
+            serial_runner = SerialInsertRunner(self.db, self.dataset, self.normalize, self.timeout)
+            return serial_runner.run()
+        
+        if len(self.dataset.train_files) <= 1:
+            log.info("Single training file detected, using serial loading")
+            serial_runner = SerialInsertRunner(self.db, self.dataset, self.normalize, self.timeout)
+            return serial_runner.run()
+        
+        log.info(f"Starting parallel loading of Deep1B dataset with {self.max_workers} workers")
+        log.info(f"Files to load: {len(self.dataset.train_files)} files")
+        
+        # Prepare database configuration for workers
+        db_config = {
+            'db_class': type(self.db),
+            'db_params': self.db.__dict__.copy()
+        }
+        
+        total_count = 0
+        start_time = time.perf_counter()
+        
+        try:
+            with concurrent.futures.ProcessPoolExecutor(
+                mp_context=mp.get_context("spawn"),
+                max_workers=self.max_workers
+            ) as executor:
+                # Submit all file loading tasks
+                future_to_file = {
+                    executor.submit(
+                        self._load_single_file,
+                        db_config,
+                        file_name,
+                        str(self.dataset.data_dir),
+                        self.normalize
+                    ): file_name
+                    for file_name in self.dataset.train_files
+                }
+                
+                # Process completed tasks
+                for future in concurrent.futures.as_completed(future_to_file, timeout=self.timeout):
+                    file_name = future_to_file[future]
+                    try:
+                        count, duration = future.result()
+                        total_count += count
+                        log.info(f"Completed loading {file_name}: {count:,} embeddings")
+                    except Exception as e:
+                        log.error(f"Failed to load {file_name}: {e}")
+                        # Cancel remaining tasks and re-raise
+                        for f in future_to_file:
+                            f.cancel()
+                        raise e
+                        
+        except concurrent.futures.TimeoutError as e:
+            msg = f"Deep1B parallel loading timeout after {self.timeout}s"
+            log.error(msg)
+            raise PerformanceTimeoutError(msg) from e
+        except Exception as e:
+            log.error(f"Deep1B parallel loading failed: {e}")
+            raise e
+        
+        total_duration = time.perf_counter() - start_time
+        log.info(f"Deep1B parallel loading completed: {total_count:,} embeddings in {total_duration:.2f}s")
+        log.info(f"Average loading rate: {total_count / total_duration:.0f} embeddings/second")
+        
+        return total_count
