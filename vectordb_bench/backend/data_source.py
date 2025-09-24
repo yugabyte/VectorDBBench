@@ -3,6 +3,7 @@ import pathlib
 import typing
 from abc import ABC, abstractmethod
 from enum import Enum
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from tqdm import tqdm
 
@@ -257,6 +258,62 @@ class Deep1BS3Reader(DatasetReader):
         # Ensure remote_root ends with / and build proper path
         root = self.remote_root.rstrip('/') + '/'
         return root + filename
+    
+    def _download_single_file(self, s3_path: str, local_file: pathlib.Path) -> dict:
+        """Download a single file from S3 and return status info"""
+        try:
+            log.debug(f"downloading file {s3_path} to {local_file}")
+            self.fs.download(s3_path, local_file.as_posix())
+            log.debug(f"Successfully downloaded {s3_path}")
+            return {
+                "success": True,
+                "s3_path": s3_path,
+                "local_file": str(local_file),
+                "error": None
+            }
+        except Exception as e:
+            log.error(f"Failed to download {s3_path}: {e}")
+            return {
+                "success": False,
+                "s3_path": s3_path,
+                "local_file": str(local_file),
+                "error": str(e)
+            }
+    
+    def _download_files_parallel(self, downloads: list[tuple[str, pathlib.Path]], max_workers: int = 4) -> None:
+        """Download multiple files in parallel using ThreadPoolExecutor"""
+        if not downloads:
+            return
+            
+        log.info(f"Start downloading {len(downloads)} files from S3 using {max_workers} parallel workers")
+        
+        failed_downloads = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all download tasks
+            future_to_download = {
+                executor.submit(self._download_single_file, s3_path, local_file): (s3_path, local_file)
+                for s3_path, local_file in downloads
+            }
+            
+            # Process completed downloads with progress bar
+            with tqdm(total=len(downloads), desc="Downloading files") as pbar:
+                for future in as_completed(future_to_download):
+                    result = future.result()
+                    pbar.update(1)
+                    
+                    if not result["success"]:
+                        failed_downloads.append((result["s3_path"], result["local_file"], result["error"]))
+                    else:
+                        pbar.set_postfix_str(f"Downloaded: {pathlib.Path(result['local_file']).name}")
+        
+        # Handle any failed downloads
+        if failed_downloads:
+            log.error(f"Failed to download {len(failed_downloads)} files:")
+            for s3_path, local_file, error in failed_downloads:
+                log.error(f"  {s3_path} -> {local_file}: {error}")
+            raise RuntimeError(f"Failed to download {len(failed_downloads)} out of {len(downloads)} files")
+        
+        log.info(f"Successfully downloaded all {len(downloads)} files from S3")
 
     def validate_file(self, remote: str, local: pathlib.Path) -> bool:
         """Validate if local file matches remote file"""
@@ -290,6 +347,7 @@ class Deep1BS3Reader(DatasetReader):
         # Get the percentage configuration
         percentage = deep1b_dataset_percentage if deep1b_dataset_percentage is not None else config.DEEP1B_DATASET_PERCENTAGE
         log.info(f"Deep1B S3: Using {percentage*100}% of dataset from {self.remote_root}")
+        log.info(f"Deep1B S3: Parallel download workers configured: {config.DEEP1B_S3_DOWNLOAD_WORKERS}")
         
         if percentage <= 0.0 or percentage > 1.0:
             raise ValueError(f"DEEP1B_DATASET_PERCENTAGE must be between 0.0 and 1.0, got {percentage}")
@@ -340,17 +398,12 @@ class Deep1BS3Reader(DatasetReader):
             log.info("All files are already present and validated")
             return
 
-        log.info(f"Start downloading {len(downloads)} files from S3")
-        for s3_path, local_file in tqdm(downloads):
-            log.debug(f"downloading file {s3_path} to {local_file}")
-            try:
-                self.fs.download(s3_path, local_file.as_posix())
-                log.debug(f"Successfully downloaded {s3_path}")
-            except Exception as e:
-                log.error(f"Failed to download {s3_path}: {e}")
-                raise
-
-        log.info(f"Successfully downloaded {len(downloads)} files from S3")
+        # Determine optimal number of parallel workers based on configuration and number of files
+        # Use configured workers but scale down for fewer files to avoid overhead
+        max_workers = min(config.DEEP1B_S3_DOWNLOAD_WORKERS, max(1, len(downloads)))
+        
+        # Use parallel downloads
+        self._download_files_parallel(downloads, max_workers=max_workers)
 
 
 def deep1b_reader():
