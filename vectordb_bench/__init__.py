@@ -78,8 +78,10 @@ class config:
     OPTIMIZE_TIMEOUT_96D_1B = 7200 * 3600  # 300d - very large dataset
     # Deep1B dataset percentage for testing (0.0 to 1.0, default 1.0 = 100%)
     DEEP1B_DATASET_PERCENTAGE = env.float("DEEP1B_DATASET_PERCENTAGE", 1.0)
-    # Deep1B S3 download parallelism (number of concurrent downloads, default 8)
+    # Deep1B S3 download parallelism (number of concurrent downloads, default 15)
     DEEP1B_S3_DOWNLOAD_WORKERS = env.int("DEEP1B_S3_DOWNLOAD_WORKERS", 15)
+    # Deep1B parallel loading workers (number of concurrent database connections for loading, default 4)
+    DEEP1B_LOAD_WORKERS = env.int("DEEP1B_LOAD_WORKERS", 4)
     
     OPTIMIZE_TIMEOUT_DEFAULT = 24 * 3600  # 24h
     OPTIMIZE_TIMEOUT_768D_1M = 24 * 3600  # 24h
