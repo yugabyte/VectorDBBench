@@ -202,6 +202,7 @@ class DatasetManager(BaseModel):
         self,
         source: DatasetSource = DatasetSource.S3,
         filters: float | str | None = None,
+        load_train_data: bool = True,
     ) -> bool:
         """Download the dataset from DatasetSource
          url = f"{source}/{self.data.dir_name}"
@@ -210,6 +211,7 @@ class DatasetManager(BaseModel):
             source(DatasetSource): S3 or AliyunOSS, default as S3
             filters(Optional[int | float | str]): combined with dataset's with_gt to
               compose the correct ground_truth file
+            load_train_data(bool): whether to download train files, default True
 
         Returns:
             bool: whether the dataset is successfully prepared
@@ -217,27 +219,27 @@ class DatasetManager(BaseModel):
         """
         file_count, use_shuffled = self.data.file_count, self.data.use_shuffled
 
-        train_files = utils.compose_train_files(file_count, use_shuffled)
-        all_files = train_files
+        all_files = []
+        
+        # Only include train files if load_train_data is True
+        if load_train_data:
+            train_files = utils.compose_train_files(file_count, use_shuffled)
+            all_files.extend(train_files)
 
-        test_file = "test.parquet"
-        all_files.extend([test_file])
-        gt_file = None
+        gt_file, test_file = None, None
         if self.data.with_gt:
-            gt_file = utils.compose_gt_file(filters)
-            all_files.extend([gt_file])
+            gt_file, test_file = utils.compose_gt_file(filters), "test.parquet"
+            all_files.extend([gt_file, test_file])
 
-        if not self.data.is_custom:
+        if not self.data.is_custom and all_files:
             source.reader().read(
                 dataset=self.data.dir_name.lower(),
                 files=all_files,
                 local_ds_root=self.data_dir,
             )
 
-        if test_file is not None:
+        if gt_file is not None and test_file is not None:
             self.test_data = self._read_file(test_file)
-
-        if gt_file is not None:
             self.gt_data = self._read_file(gt_file)
 
         prefix = "shuffle_train" if use_shuffled else "train"
