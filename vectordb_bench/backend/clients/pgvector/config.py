@@ -242,7 +242,8 @@ class PgVectorHNSWConfig(PgVectorIndexConfig):
         }
 
     def session_param(self) -> PgVectorSessionCommands:
-        session_parameters = {"hnsw.ef_search": self.ef_search}
+        ef_search_param = f"{self.index.value}.ef_search"
+        session_parameters = {ef_search_param: self.ef_search}
         return {"session_options": self._optionally_build_set_options(session_parameters)}
 
 
