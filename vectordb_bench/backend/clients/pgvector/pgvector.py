@@ -374,11 +374,11 @@ class PgVector(VectorDB):
                     "CREATE TABLE IF NOT EXISTS public.{table_name} (id BIGINT PRIMARY KEY, embedding vector({dim}));",
                 ).format(table_name=sql.Identifier(self.table_name), dim=dim),
             )
-            self.cursor.execute(
-                sql.SQL(
-                    "ALTER TABLE public.{table_name} ALTER COLUMN embedding SET STORAGE PLAIN;",
-                ).format(table_name=sql.Identifier(self.table_name)),
-            )
+            # self.cursor.execute(
+            #     sql.SQL(
+            #         "ALTER TABLE public.{table_name} ALTER COLUMN embedding SET STORAGE PLAIN;",
+            #     ).format(table_name=sql.Identifier(self.table_name)),
+            # )
             self.conn.commit()
         except Exception as e:
             log.warning(f"Failed to create pgvector table: {self.table_name} error: {e}")

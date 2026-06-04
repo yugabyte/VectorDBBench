@@ -171,6 +171,8 @@ class PgVectorIVFFlatConfig(PgVectorIndexConfig):
     reranking: bool | None = None
     quantized_fetch_limit: int | None = None
     reranking_metric: str | None = None
+    create_index_before_load: bool | None = True
+    create_index_after_load: bool | None = False
 
     def index_param(self) -> PgVectorIndexParam:
         index_parameters = {"lists": self.lists}
@@ -215,6 +217,8 @@ class PgVectorHNSWConfig(PgVectorIndexConfig):
     reranking: bool | None = None
     quantized_fetch_limit: int | None = None
     reranking_metric: str | None = None
+    create_index_before_load: bool | None = True
+    create_index_after_load: bool | None = False
 
     def index_param(self) -> PgVectorIndexParam:
         index_parameters = {"m": self.m, "ef_construction": self.ef_construction}

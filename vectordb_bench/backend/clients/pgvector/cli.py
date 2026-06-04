@@ -118,6 +118,28 @@ class PgVectorTypedDict(CommonTypedDict):
             callback=set_default_quantized_fetch_limit,
         ),
     ]
+    create_index_before_load: Annotated[
+        bool | None,
+        click.option(
+            "--create-index-before-load",
+            type=bool,
+            help="Enable create index before loading vectors",
+            default=True,
+            required=False,
+            show_default=True,
+        ),
+    ]
+    create_index_after_load: Annotated[
+        bool | None,
+        click.option(
+            "--create-index-after-load",
+            type=bool,
+            help="Enable create index after loading vectors",
+            default=False,
+            required=False,
+            show_default=True,
+        ),
+    ]
 
 
 class PgVectorIVFFlatTypedDict(PgVectorTypedDict, IVFFlatTypedDict): ...
@@ -149,6 +171,8 @@ def PgVectorIVFFlat(
             reranking=parameters["reranking"],
             reranking_metric=parameters["reranking_metric"],
             quantized_fetch_limit=parameters["quantized_fetch_limit"],
+            create_index_before_load=parameters["create_index_before_load"],
+            create_index_after_load=parameters["create_index_after_load"],
         ),
         **parameters,
     )
@@ -185,6 +209,8 @@ def PgVectorHNSW(
             reranking=parameters["reranking"],
             reranking_metric=parameters["reranking_metric"],
             quantized_fetch_limit=parameters["quantized_fetch_limit"],
+            create_index_before_load=parameters["create_index_before_load"],
+            create_index_after_load=parameters["create_index_after_load"],
         ),
         **parameters,
     )
