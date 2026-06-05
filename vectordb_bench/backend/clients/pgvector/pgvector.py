@@ -428,12 +428,12 @@ class PgVector(VectorDB):
                         primary_field=sql.Identifier(self._primary_field),
                     )
                 )
-
-            self.cursor.execute(
-                sql.SQL(
-                    "ALTER TABLE public.{table_name} ALTER COLUMN embedding SET STORAGE PLAIN;",
-                ).format(table_name=sql.Identifier(self.table_name)),
-            )
+            # Commented for yugabyte as it doesn't support alter table 
+            # self.cursor.execute(
+            #     sql.SQL(
+            #         "ALTER TABLE public.{table_name} ALTER COLUMN embedding SET STORAGE PLAIN;",
+            #     ).format(table_name=sql.Identifier(self.table_name)),
+            # )
             self.conn.commit()
         except Exception as e:
             log.warning(f"Failed to create pgvector table: {self.table_name} error: {e}")

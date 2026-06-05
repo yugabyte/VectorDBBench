@@ -348,7 +348,7 @@ class DatasetManager(BaseModel):
         self,
         source: DatasetSource = DatasetSource.S3,
         filters: Filter = non_filter,
-        with_train_files: bool = True,
+        with_train_files: bool = False,
         with_scalar_labels: bool = False,
     ) -> bool:
         """Download the dataset from DatasetSource
