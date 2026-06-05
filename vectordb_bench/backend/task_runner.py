@@ -218,7 +218,7 @@ class CaseRunner(BaseModel):
             self.ca.dataset.prepare(
                 self.dataset_source,
                 filters=self.ca.filters,
-                with_train_files=TaskStage.LOAD in self.config.stages,
+                with_train_files=drop_old and TaskStage.LOAD in self.config.stages,
                 with_scalar_labels=self.ca.with_scalar_labels,
             )
         except ModuleNotFoundError as e:
