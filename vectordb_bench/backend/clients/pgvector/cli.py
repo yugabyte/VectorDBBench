@@ -55,6 +55,26 @@ class PgVectorTypedDict(CommonTypedDict):
         ),
     ]
     db_name: Annotated[str, click.option("--db-name", type=str, help="Db name", required=True)]
+    create_index_before_load: Annotated[
+        bool,
+        click.option(
+            "--create-index-before-load/--skip-create-index-before-load",
+            type=bool,
+            default=False,
+            show_default=True,
+            help="Create the index before loading data (empty index, then insert)",
+        ),
+    ]
+    create_index_after_load: Annotated[
+        bool,
+        click.option(
+            "--create-index-after-load/--skip-create-index-after-load",
+            type=bool,
+            default=True,
+            show_default=True,
+            help="Create the index after loading data (insert, then build index)",
+        ),
+    ]
     maintenance_work_mem: Annotated[
         str | None,
         click.option(
@@ -152,6 +172,8 @@ def PgVectorIVFFlat(
         ),
         db_case_config=PgVectorIVFFlatConfig(
             metric_type=None,
+            create_index_before_load=parameters["create_index_before_load"],
+            create_index_after_load=parameters["create_index_after_load"],
             lists=parameters["lists"],
             probes=parameters["probes"],
             maintenance_work_mem=parameters["maintenance_work_mem"],
@@ -188,6 +210,8 @@ def PgVectorHNSW(
             db_name=parameters["db_name"],
         ),
         db_case_config=PgVectorHNSWConfig(
+            create_index_before_load=parameters["create_index_before_load"],
+            create_index_after_load=parameters["create_index_after_load"],
             m=parameters["m"],
             ef_construction=parameters["ef_construction"],
             ef_search=parameters["ef_search"],
