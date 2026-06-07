@@ -67,6 +67,7 @@ class PgVectorIndexConfig(BaseModel, DBCaseConfig):
     # Options: "strict_order" (order by distance), "relaxed_order" (slightly out of order but better recall)
     # See: https://github.com/pgvector/pgvector?tab=readme-ov-file#iterative-index-scans
     iterative_scan: str = "relaxed_order"
+    deep1b_dataset_percentage: float | None = None
 
     def parse_metric(self) -> str:
         d = {

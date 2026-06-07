@@ -626,6 +626,15 @@ class CommonTypedDict(TypedDict):
             help="Zero-padding width for CloudMultiTenantSearchCase tenant IDs",
         ),
     ]
+    deep1b_dataset_percentage: Annotated[
+        float,
+        click.option(
+            "--deep1b-dataset-percentage",
+            help="Percentage of Deep1B dataset to use (0.0 to 1.0, default: 1.0 = 100%)",
+            default=config.DEEP1B_DATASET_PERCENTAGE,
+            show_default=True,
+        ),
+    ]
 
 
 class HNSWBaseTypedDict(TypedDict):
@@ -793,6 +802,17 @@ def run(
         db_case_config (DBCaseConfig)
         **parameters: expects keys from CommonTypedDict
     """
+    # Resolve the Deep1B dataset percentage (accept both underscore and dash keys),
+    # mirroring it into the global config so dataset readers can pick it up as a fallback.
+    deep1b_dataset_percentage = None
+    for key in ["deep1b_dataset_percentage", "deep1b-dataset-percentage"]:
+        if parameters.get(key) is not None:
+            try:
+                deep1b_dataset_percentage = float(parameters[key])
+                config.DEEP1B_DATASET_PERCENTAGE = deep1b_dataset_percentage
+                break
+            except (TypeError, ValueError) as e:
+                log.warning(f"Could not parse {key}={parameters[key]!r}: {e}")
 
     task = TaskConfig(
         db=db,
@@ -815,6 +835,7 @@ def run(
             parameters["search_concurrent"],
         ),
         load_concurrency=parameters["load_concurrency"],
+        deep1b_dataset_percentage=deep1b_dataset_percentage,
     )
     task_label = parameters["task_label"]
 
