@@ -60,14 +60,17 @@ class BaseDataset(BaseModel):
     @field_validator("size")
     @classmethod
     def verify_size(cls, v: int):
-        if v not in cls._size_label:
-            msg = f"Size {v} not supported for the dataset, expected: {cls._size_label.keys()}"
+        if not hasattr(cls, '_size_label') or v not in cls._size_label:
+            msg = f"Size {v} not supported for the dataset, expected: {getattr(cls, '_size_label', {}).keys()}"
             raise ValueError(msg)
         return v
 
     @property
     def label(self) -> str:
-        return self._size_label.get(self.size).label
+        if not hasattr(type(self), '_size_label'):
+            return ""
+        size_label = type(self)._size_label.get(self.size)
+        return size_label.label if size_label else ""
 
     @property
     def full_name(self) -> str:
@@ -79,7 +82,10 @@ class BaseDataset(BaseModel):
 
     @property
     def file_count(self) -> int:
-        return self._size_label.get(self.size).file_count
+        if not hasattr(type(self), '_size_label'):
+            return 0
+        size_label = type(self)._size_label.get(self.size)
+        return size_label.file_count if size_label else 0
 
     @property
     def train_files(self) -> list[str]:
@@ -293,6 +299,19 @@ class OpenAI(BaseDataset):
     ]
 
 
+class Deep1B(BaseDataset):
+    name: str = "Deep1B"
+    dim: int = 96
+    metric_type: MetricType = MetricType.L2
+    use_shuffled: bool = False
+    with_gt: bool = True  # S3 version has ground truth (neighbors.parquet)
+    # Deep1B has its own dedicated readers (S3 / local), not the standard S3 layout.
+    with_remote_resource: bool = False
+    _size_label: ClassVar[dict] = {
+        1_000_000_000: SizeLabel(1_000_000_000, "LARGE", 100),
+    }
+
+
 class DatasetManager(BaseModel):
     """Download dataset if not in the local directory. Provide data for cases.
 
@@ -311,7 +330,7 @@ class DatasetManager(BaseModel):
     train_files: list[str] = []
     reader: DatasetReader | None = None
 
-    def __eq__(self, obj: any):
+    def __eq__(self, obj: object) -> bool:
         if isinstance(obj, DatasetManager):
             return self.data.name == obj.data.name and self.data.label == obj.data.label
         return False
@@ -350,6 +369,8 @@ class DatasetManager(BaseModel):
         filters: Filter = non_filter,
         with_train_files: bool = False,
         with_scalar_labels: bool = False,
+        deep1b_dataset_percentage: float | None = None,
+        skip_load: bool = False,
     ) -> bool:
         """Download the dataset from DatasetSource
          url = f"{source}/{self.data.dir_name}"
@@ -358,6 +379,7 @@ class DatasetManager(BaseModel):
             source(DatasetSource): S3 or AliyunOSS, default as S3
             filters(Filter): combined with dataset's with_gt to
               compose the correct ground_truth file
+            skip_load(bool): whether load phase is skipped - for optimization
 
         Returns:
             bool: whether the dataset is successfully prepared
@@ -368,7 +390,27 @@ class DatasetManager(BaseModel):
         if self.data.with_gt:
             gt_file, test_file = filters.groundtruth_file, self.data.test_file
 
-        if self.data.with_remote_resource:
+        # Deep1B uses dedicated readers (S3 by default, local fallback) and supports
+        # percentage-based / skip-load downloads.
+        deep1b_reader_source = None
+        if self.data.name == "Deep1B":
+            deep1b_reader_source = (
+                DatasetSource.Deep1BS3 if source != DatasetSource.Deep1BLocal else DatasetSource.Deep1BLocal
+            )
+            if deep1b_reader_source == DatasetSource.Deep1BS3:
+                log.info("Using Deep1B S3 dataset - optimized for pgvector databases")
+
+            download_files = [file for file in self.train_files]
+            download_files.extend([gt_file, test_file])
+            download_files = [file for file in download_files if file is not None]
+            deep1b_reader_source.reader().read(
+                dataset=self.data.dir_name.lower(),
+                files=download_files,
+                local_ds_root=self.data_dir,
+                deep1b_dataset_percentage=deep1b_dataset_percentage,
+                skip_load=skip_load,
+            )
+        elif self.data.with_remote_resource:
             download_files = [file for file in self.train_files]
             download_files.extend([gt_file, test_file])
             if self.data.with_scalar_labels and self.data.scalar_labels_file_separated:
@@ -386,7 +428,33 @@ class DatasetManager(BaseModel):
         if needs_scalar_labels and self.data.with_scalar_labels and self.data.scalar_labels_file_separated:
             self.scalar_labels = self._read_file(self.data.scalar_labels_file)
 
-        if gt_file is not None and test_file is not None:
+        if self.data.name == "Deep1B":
+            # Deep1B stores test/ground-truth differently depending on the reader used.
+            if deep1b_reader_source == DatasetSource.Deep1BS3:
+                # S3 version: multiple train_<number>.parquet files plus test/neighbors.
+                if with_train_files:
+                    self.train_files = sorted([f.name for f in self.data_dir.glob("train_*.parquet")])
+                test_filename, gt_filename = "test.parquet", "neighbors.parquet"
+            else:
+                # Local version: percentage-specific filenames, no ground truth.
+                percentage = (
+                    deep1b_dataset_percentage
+                    if deep1b_dataset_percentage is not None
+                    else config.DEEP1B_DATASET_PERCENTAGE
+                )
+                train_filename = f"train_{int(percentage * 100)}p.parquet"
+                test_filename = f"test_{int(percentage * 100)}p.parquet"
+                gt_filename = None
+                if with_train_files:
+                    self.train_files = (
+                        [train_filename] if self.data_dir.joinpath(train_filename).exists() else []
+                    )
+
+            if self.data_dir.joinpath(test_filename).exists():
+                self.test_data = self._read_file(test_filename)[self.data.test_vector_field].to_list()
+            if gt_filename and self.data_dir.joinpath(gt_filename).exists():
+                self.gt_data = self._read_file(gt_filename)[self.data.gt_neighbors_field].to_list()
+        elif gt_file is not None and test_file is not None:
             self.test_data = self._read_file(test_file)[self.data.test_vector_field].to_list()
             self.gt_data = self._read_file(gt_file)[self.data.gt_neighbors_field].to_list()
 
@@ -427,6 +495,13 @@ class DataSetIterator:
     def __iter__(self):
         return self
 
+    def _get_batch_size(self) -> int:
+        """Get batch size for the current dataset"""
+        # Deep1B dataset uses larger batch size for better performance
+        if self._ds.data.name == "Deep1B":
+            return 1_000_000
+        return self._batch_size
+
     def _get_iter(self, file_name: str):
         p = pathlib.Path(self._ds.data_dir, file_name)
         log.info(f"Get iterator for {p.name}")
@@ -434,7 +509,9 @@ class DataSetIterator:
             msg = f"No such file: {p}"
             log.warning(msg)
             raise IndexError(msg)
-        return ParquetFile(p, memory_map=True, pre_buffer=True).iter_batches(self._batch_size)
+        batch_size = self._get_batch_size()
+        log.info(f"Using batch size {batch_size} for dataset {self._ds.data.name}")
+        return ParquetFile(p, memory_map=True, pre_buffer=True).iter_batches(batch_size)
 
     def __next__(self) -> pd.DataFrame:
         """return the data in the next file of the training list"""
@@ -472,6 +549,7 @@ class Dataset(Enum):
     GLOVE = Glove
     SIFT = SIFT
     OPENAI = OpenAI
+    DEEP1B = Deep1B
 
     def get(self, size: int) -> BaseDataset:
         return self.value(size=size)

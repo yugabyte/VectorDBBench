@@ -220,6 +220,8 @@ class CaseRunner(BaseModel):
                 filters=self.ca.filters,
                 with_train_files=drop_old and TaskStage.LOAD in self.config.stages,
                 with_scalar_labels=self.ca.with_scalar_labels,
+                deep1b_dataset_percentage=self.config.deep1b_dataset_percentage,
+                skip_load=TaskStage.LOAD not in self.config.stages,
             )
         except ModuleNotFoundError as e:
             log.warning(f"pre run case error: please install client for db: {self.config.db}, error={e}")
@@ -293,15 +295,16 @@ class CaseRunner(BaseModel):
             m = Metric()
             if drop_old:
                 if TaskStage.LOAD in self.config.stages:
-                    _, load_dur = self._load_train_data()
+                    count, load_dur = self._load_train_data()
                     build_dur = self._optimize()
                     m.insert_duration = round(load_dur, 4)
                     m.optimize_duration = round(build_dur, 4)
                     m.load_duration = round(load_dur + build_dur, 4)
+                    m.max_load_count = count
                     log.info(
                         f"Finish loading the entire dataset into VectorDB,"
                         f" insert_duration={load_dur}, optimize_duration={build_dur}"
-                        f" load_duration(insert + optimize) = {m.load_duration}"
+                        f" load_duration(insert + optimize) = {m.load_duration}, max_load_count={count}"
                     )
                 else:
                     log.info("Data loading skipped")
@@ -459,7 +462,8 @@ class CaseRunner(BaseModel):
                 with_scalar_labels=self.ca.with_scalar_labels,
                 **runner_kwargs,
             )
-            runner.run()
+            count = runner.run()
+            return count
         except Exception as e:
             raise e from None
         finally:
