@@ -491,6 +491,19 @@ class DatasetWithSizeType(Enum):
     OpenAIMedium = "Medium OpenAI (1536dim, 500K)"
     OpenAILarge = "Large OpenAI (1536dim, 5M)"
 
+    @classmethod
+    def _missing_(cls, value: object) -> "DatasetWithSizeType | None":
+        """Accept the enum member name (e.g. "CohereLarge") in addition to its value.
+
+        Value lookup (e.g. "Large Cohere (768dim, 10M)") is tried first by Enum; this
+        fallback lets callers also pass the more ergonomic member name.
+        """
+        if isinstance(value, str):
+            for member in cls:
+                if member.name == value:
+                    return member
+        return None
+
     def get_manager(self) -> DatasetManager:
         if self not in DatasetWithSizeMap:
             msg = f"wrong ScalarDatasetWithSizeType: {self.name}"
