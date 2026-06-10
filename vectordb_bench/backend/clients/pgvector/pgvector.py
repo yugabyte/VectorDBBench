@@ -1,6 +1,7 @@
 """Wrapper around the Pgvector vector database over VectorDB"""
 
 import logging
+import random
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from typing import Any
@@ -89,6 +90,19 @@ class PgVector(VectorDB):
 
     @staticmethod
     def _create_connection(**kwargs) -> tuple[Connection, Cursor]:
+        # `host` may be a comma-separated list of YugabyteDB nodes. perfservice passes
+        # the full tserver-nodes list (instead of the single master-leader) when load
+        # balancing is requested. Each concurrent-search worker is its own process
+        # opening one long-lived connection, so picking a node at random here spreads
+        # connections ~evenly across the cluster -- avoiding the one-hot-node we get
+        # when every worker connects to the same host. A single host (no comma) is a
+        # no-op, so default runs are unchanged.
+        host = kwargs.get("host")
+        if host and "," in host:
+            candidates = [h.strip() for h in host.split(",") if h.strip()]
+            if candidates:
+                kwargs["host"] = random.choice(candidates)
+
         conn = psycopg.connect(**kwargs)
         register_vector(conn)
         conn.autocommit = False
