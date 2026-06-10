@@ -59,7 +59,10 @@ weaviate        = [ "weaviate-client" ]
 elastic         = [ "elasticsearch" ]
 # For elastic and aliyun_elasticsearch
 
-pgvector        = [ "psycopg", "psycopg-binary", "pgvector" ]
+# Smart-driver branch: use the YugabyteDB psycopg3 smart driver (drop-in: import
+# stays `psycopg`). [binary] bundles libpq so no system libpq/build is needed.
+# NOTE: psycopg-yugabytedb cannot coexist with upstream psycopg in the same env.
+pgvector        = [ "psycopg-yugabytedb[binary]==3.3.4.1rc1", "pgvector" ]
 # for pgvector, pgvectorscale, pgdiskann, and, alloydb
 
 pgvecto_rs      = [ "pgvecto_rs[psycopg3]>=0.2.2" ]

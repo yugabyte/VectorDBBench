@@ -11,13 +11,20 @@ POSTGRE_URL_PLACEHOLDER = "postgresql://%s:%s@%s/%s"
 
 class PgVectorConfigDict(TypedDict):
     """These keys will be directly used as kwargs in psycopg connection string,
-    so the names must match exactly psycopg API"""
+    so the names must match exactly psycopg API.
+
+    Exception: `load_balance` is a VectorDBBench-only toggle (popped before reaching
+    psycopg.connect); when set it adds the YugabyteDB smart-driver param
+    `load_balance_hosts=true`. `topology_keys` is a real YB smart-driver param.
+    See PgVector._create_connection."""
 
     user: str
     password: str
     host: str
     port: int
     dbname: str
+    load_balance: bool
+    topology_keys: str | None
 
 
 class PgVectorConfig(DBConfig):
@@ -27,6 +34,14 @@ class PgVectorConfig(DBConfig):
     port: int = 5432
     db_name: str = "vectordb"
     table_name: str = "vdbbench_table_test"
+    # Smart-driver branch: enable YugabyteDB cluster-aware connection load balancing
+    # (load_balance_hosts=true) by default. The driver discovers nodes via yb_servers()
+    # and spreads connections across the cluster, so per-process search workers don't
+    # all land on the configured host. Set false to use a plain single-host connection.
+    load_balance: bool = True
+    # Optional YB smart-driver topology hint, e.g. "cloud.region.zone" (comma-separated
+    # for multiple). None = balance across all nodes.
+    topology_keys: str | None = None
 
     def to_dict(self) -> PgVectorConfigDict:
         user_str = self.user_name.get_secret_value() if isinstance(self.user_name, SecretStr) else self.user_name
@@ -38,6 +53,8 @@ class PgVectorConfig(DBConfig):
                 "dbname": self.db_name,
                 "user": user_str,
                 "password": pwd_str,
+                "load_balance": self.load_balance,
+                "topology_keys": self.topology_keys,
             },
             "table_name": self.table_name,
         }

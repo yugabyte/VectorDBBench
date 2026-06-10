@@ -1,7 +1,6 @@
 """Wrapper around the Pgvector vector database over VectorDB"""
 
 import logging
-import random
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from typing import Any
@@ -90,18 +89,23 @@ class PgVector(VectorDB):
 
     @staticmethod
     def _create_connection(**kwargs) -> tuple[Connection, Cursor]:
-        # `host` may be a comma-separated list of YugabyteDB nodes. perfservice passes
-        # the full tserver-nodes list (instead of the single master-leader) when load
-        # balancing is requested. Each concurrent-search worker is its own process
-        # opening one long-lived connection, so picking a node at random here spreads
-        # connections ~evenly across the cluster -- avoiding the one-hot-node we get
-        # when every worker connects to the same host. A single host (no comma) is a
-        # no-op, so default runs are unchanged.
-        host = kwargs.get("host")
-        if host and "," in host:
-            candidates = [h.strip() for h in host.split(",") if h.strip()]
-            if candidates:
-                kwargs["host"] = random.choice(candidates)
+        # Smart-driver branch: this build installs psycopg-yugabytedb, a psycopg3
+        # fork that is YugabyteDB cluster-aware (the import name stays `psycopg`).
+        # When load_balance is on, set the smart-driver connection params so the
+        # driver discovers cluster nodes via yb_servers() and distributes new
+        # connections across them (uniform / least-connections). That way the
+        # per-process search workers don't all pile onto the single configured
+        # host. `host` is only the seed used for discovery -- a single endpoint
+        # (e.g. master-leader) is sufficient; a comma-separated list also works
+        # and just provides multiple bootstrap seeds.
+        load_balance = kwargs.pop("load_balance", True)
+        topology_keys = kwargs.pop("topology_keys", None)
+        if load_balance:
+            # libpq/YB smart-driver params (understood by psycopg-yugabytedb's
+            # bundled libpq). Don't clobber an explicit caller-provided value.
+            kwargs.setdefault("load_balance_hosts", "true")
+            if topology_keys:
+                kwargs.setdefault("topology_keys", topology_keys)
 
         conn = psycopg.connect(**kwargs)
         register_vector(conn)
