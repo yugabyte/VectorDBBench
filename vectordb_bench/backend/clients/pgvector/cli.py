@@ -56,6 +56,29 @@ class PgVectorTypedDict(CommonTypedDict):
         ),
     ]
     db_name: Annotated[str, click.option("--db-name", type=str, help="Db name", required=True)]
+    load_balance: Annotated[
+        bool,
+        click.option(
+            "--load-balance/--skip-load-balance",
+            type=bool,
+            default=True,
+            show_default=True,
+            help="Enable YugabyteDB smart-driver connection load balancing "
+            "(load_balance_hosts=true): the driver discovers nodes via yb_servers() and "
+            "distributes connections across the cluster. Requires the psycopg-yugabytedb driver.",
+        ),
+    ]
+    topology_keys: Annotated[
+        str | None,
+        click.option(
+            "--topology-keys",
+            type=str,
+            default=None,
+            required=False,
+            help="Optional YB smart-driver topology hint (cloud.region.zone, comma-separated). "
+            "Restricts load balancing to matching nodes; omit to balance across all nodes.",
+        ),
+    ]
     create_index_before_load: Annotated[
         bool,
         click.option(
@@ -170,6 +193,8 @@ def PgVectorIVFFlat(
             host=parameters["host"],
             port=parameters["port"],
             db_name=parameters["db_name"],
+            load_balance=parameters["load_balance"],
+            topology_keys=parameters["topology_keys"],
         ),
         db_case_config=PgVectorIVFFlatConfig(
             metric_type=None,
@@ -209,6 +234,8 @@ def PgVectorHNSW(
             host=parameters["host"],
             port=parameters["port"],
             db_name=parameters["db_name"],
+            load_balance=parameters["load_balance"],
+            topology_keys=parameters["topology_keys"],
         ),
         db_case_config=PgVectorHNSWConfig(
             create_index_before_load=parameters["create_index_before_load"],
