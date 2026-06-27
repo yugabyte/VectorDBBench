@@ -61,11 +61,12 @@ class PgVectorTypedDict(CommonTypedDict):
         click.option(
             "--load-balance/--skip-load-balance",
             type=bool,
-            default=True,
+            default=False,
             show_default=True,
             help="Enable YugabyteDB smart-driver connection load balancing "
             "(load_balance_hosts=true): the driver discovers nodes via yb_servers() and "
-            "distributes connections across the cluster. Requires the psycopg-yugabytedb driver.",
+            "distributes connections across the cluster. Requires the psycopg-yugabytedb driver. "
+            "Leave off for plain PostgreSQL; pass --load-balance when targeting YugabyteDB.",
         ),
     ]
     topology_keys: Annotated[

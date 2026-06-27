@@ -54,6 +54,11 @@ class PgVector(VectorDB):
         self._vector_field = "embedding"
         self._scalar_label_field = "label"
 
+        # Detected lazily on first use: True for YugabyteDB, False for vanilla
+        # PostgreSQL. Some statements (e.g. ALTER TABLE ... SET STORAGE) are only
+        # valid on PostgreSQL. See _server_is_yugabytedb.
+        self._is_yugabytedb: bool | None = None
+
         # construct basic units
         self.conn, self.cursor = self._create_connection(**self.connect_config)
 
@@ -98,7 +103,7 @@ class PgVector(VectorDB):
         # host. `host` is only the seed used for discovery -- a single endpoint
         # (e.g. master-leader) is sufficient; a comma-separated list also works
         # and just provides multiple bootstrap seeds.
-        load_balance = kwargs.pop("load_balance", True)
+        load_balance = kwargs.pop("load_balance", False)
         topology_keys = kwargs.pop("topology_keys", None)
         if load_balance:
             # libpq/YB smart-driver params (understood by psycopg-yugabytedb's
@@ -116,6 +121,25 @@ class PgVector(VectorDB):
         assert cursor is not None, "Cursor is not initialized"
 
         return conn, cursor
+
+    def _server_is_yugabytedb(self) -> bool:
+        """Return True if the connected server is YugabyteDB, False for vanilla PostgreSQL.
+
+        YugabyteDB reports a version() string like
+        'PostgreSQL 11.2-YB-2.20.1.0-b0 on x86_64-...', so the '-YB-' marker
+        reliably distinguishes it from PostgreSQL. The result is cached on the
+        instance so we only query once.
+        """
+        if self._is_yugabytedb is None:
+            assert self.cursor is not None, "Cursor is not initialized"
+            self.cursor.execute("SELECT version()")
+            version_str = self.cursor.fetchone()[0]
+            self._is_yugabytedb = "-yb-" in version_str.lower()
+            log.info(
+                f"{self.name} detected server: "
+                f"{'YugabyteDB' if self._is_yugabytedb else 'PostgreSQL'} ({version_str})"
+            )
+        return self._is_yugabytedb
 
     def _generate_search_query(self) -> sql.Composed:
         index_param = self.case_config.index_param()
@@ -446,12 +470,15 @@ class PgVector(VectorDB):
                         primary_field=sql.Identifier(self._primary_field),
                     )
                 )
-            # Commented for yugabyte as it doesn't support alter table 
-            # self.cursor.execute(
-            #     sql.SQL(
-            #         "ALTER TABLE public.{table_name} ALTER COLUMN embedding SET STORAGE PLAIN;",
-            #     ).format(table_name=sql.Identifier(self.table_name)),
-            # )
+            # Keep the embedding column stored inline (no TOAST out-of-line storage /
+            # compression) for fair PostgreSQL vector-scan benchmarking. YugabyteDB
+            # does not support ALTER TABLE ... SET STORAGE, so skip it there.
+            if not self._server_is_yugabytedb():
+                self.cursor.execute(
+                    sql.SQL(
+                        "ALTER TABLE public.{table_name} ALTER COLUMN embedding SET STORAGE PLAIN;",
+                    ).format(table_name=sql.Identifier(self.table_name)),
+                )
             self.conn.commit()
         except Exception as e:
             log.warning(f"Failed to create pgvector table: {self.table_name} error: {e}")

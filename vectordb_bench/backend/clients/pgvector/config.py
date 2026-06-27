@@ -34,11 +34,13 @@ class PgVectorConfig(DBConfig):
     port: int = 5432
     db_name: str = "vectordb"
     table_name: str = "vdbbench_table_test"
-    # Smart-driver branch: enable YugabyteDB cluster-aware connection load balancing
-    # (load_balance_hosts=true) by default. The driver discovers nodes via yb_servers()
+    # Smart-driver branch: when True, enable YugabyteDB cluster-aware connection load
+    # balancing (load_balance_hosts=true). The driver discovers nodes via yb_servers()
     # and spreads connections across the cluster, so per-process search workers don't
-    # all land on the configured host. Set false to use a plain single-host connection.
-    load_balance: bool = True
+    # all land on the configured host. Defaults to False so plain PostgreSQL works out
+    # of the box (yb_servers() does not exist there); the YugabyteDB runner should set
+    # this True explicitly in its config.
+    load_balance: bool = False
     # Optional YB smart-driver topology hint, e.g. "cloud.region.zone" (comma-separated
     # for multiple). None = balance across all nodes.
     topology_keys: str | None = None
