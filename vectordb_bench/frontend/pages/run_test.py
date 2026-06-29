@@ -1,5 +1,4 @@
 import streamlit as st
-from vectordb_bench.frontend.components.run_test.autoRefresh import autoRefresh
 from vectordb_bench.frontend.components.run_test.caseSelector import caseSelector
 from vectordb_bench.frontend.components.run_test.dbConfigSetting import dbConfigSettings
 from vectordb_bench.frontend.components.run_test.dbSelector import dbSelector
@@ -7,7 +6,7 @@ from vectordb_bench.frontend.components.run_test.generateTasks import generate_t
 from vectordb_bench.frontend.components.run_test.hideSidebar import hideSidebar
 from vectordb_bench.frontend.components.run_test.initStyle import initStyle
 from vectordb_bench.frontend.components.run_test.submitTask import submitTask
-from vectordb_bench.frontend.components.check_results.nav import NavToResults
+from vectordb_bench.frontend.components.check_results.nav import NavToResults, NavToPages
 from vectordb_bench.frontend.components.check_results.headerIcon import drawHeaderIcon
 from vectordb_bench.frontend.components.check_results.stPageConfig import initRunTestPageConfig
 
@@ -25,8 +24,8 @@ def main():
     # hide sidebar
     hideSidebar(st)
 
-    # nav to results
-    NavToResults(st)
+    # navigate
+    NavToPages(st)
 
     # header
     st.title("Run Your Test")
@@ -56,9 +55,6 @@ def main():
 
     # nav to results
     NavToResults(st, key="footer-nav-to-results")
-
-    # autofresh
-    autoRefresh()
 
 
 if __name__ == "__main__":

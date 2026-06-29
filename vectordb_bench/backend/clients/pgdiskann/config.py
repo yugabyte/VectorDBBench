@@ -43,8 +43,8 @@ class PgDiskANNIndexConfig(BaseModel, DBCaseConfig):
     metric_type: MetricType | None = None
     create_index_before_load: bool = False
     create_index_after_load: bool = True
-    maintenance_work_mem: str | None
-    max_parallel_workers: int | None
+    maintenance_work_mem: str | None = None
+    max_parallel_workers: int | None = None
 
     def parse_metric(self) -> str:
         if self.metric_type == MetricType.L2:
@@ -57,6 +57,13 @@ class PgDiskANNIndexConfig(BaseModel, DBCaseConfig):
         if self.metric_type == MetricType.L2:
             return "<->"
         if self.metric_type == MetricType.IP:
+            return "<#>"
+        return "<=>"
+
+    def parse_reranking_metric_fun_op(self) -> LiteralString:
+        if self.reranking_metric == MetricType.L2:
+            return "<->"
+        if self.reranking_metric == MetricType.IP:
             return "<#>"
         return "<=>"
 
@@ -113,9 +120,13 @@ class PgDiskANNIndexConfig(BaseModel, DBCaseConfig):
 
 class PgDiskANNImplConfig(PgDiskANNIndexConfig):
     index: IndexType = IndexType.DISKANN
-    max_neighbors: int | None
-    l_value_ib: int | None
-    l_value_is: float | None
+    max_neighbors: int | None = None
+    l_value_ib: int | None = None
+    pq_param_num_chunks: int | None = None
+    l_value_is: float | None = None
+    reranking: bool | None = None
+    reranking_metric: str | None = None
+    quantized_fetch_limit: int | None = None
     maintenance_work_mem: str | None = None
     max_parallel_workers: int | None = None
 
@@ -126,6 +137,8 @@ class PgDiskANNImplConfig(PgDiskANNIndexConfig):
             "options": {
                 "max_neighbors": self.max_neighbors,
                 "l_value_ib": self.l_value_ib,
+                "pq_param_num_chunks": self.pq_param_num_chunks,
+                "product_quantized": str(self.reranking),
             },
             "maintenance_work_mem": self.maintenance_work_mem,
             "max_parallel_workers": self.max_parallel_workers,
@@ -135,6 +148,9 @@ class PgDiskANNImplConfig(PgDiskANNIndexConfig):
         return {
             "metric": self.parse_metric(),
             "metric_fun_op": self.parse_metric_fun_op(),
+            "reranking": self.reranking,
+            "reranking_metric_fun_op": self.parse_reranking_metric_fun_op(),
+            "quantized_fetch_limit": self.quantized_fetch_limit,
         }
 
     def session_param(self) -> dict:

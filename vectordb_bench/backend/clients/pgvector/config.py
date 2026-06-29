@@ -11,31 +11,54 @@ POSTGRE_URL_PLACEHOLDER = "postgresql://%s:%s@%s/%s"
 
 class PgVectorConfigDict(TypedDict):
     """These keys will be directly used as kwargs in psycopg connection string,
-    so the names must match exactly psycopg API"""
+    so the names must match exactly psycopg API.
+
+    Exception: `load_balance` is a VectorDBBench-only toggle (popped before reaching
+    psycopg.connect); when set it adds the YugabyteDB smart-driver param
+    `load_balance_hosts=true`. `topology_keys` is a real YB smart-driver param.
+    See PgVector._create_connection."""
 
     user: str
     password: str
     host: str
     port: int
     dbname: str
+    load_balance: bool
+    topology_keys: str | None
 
 
 class PgVectorConfig(DBConfig):
-    user_name: SecretStr = SecretStr("postgres")
+    user_name: SecretStr = "postgres"
     password: SecretStr
     host: str = "localhost"
     port: int = 5432
-    db_name: str
+    db_name: str = "vectordb"
+    table_name: str = "vdbbench_table_test"
+    # Smart-driver branch: when True, enable YugabyteDB cluster-aware connection load
+    # balancing (load_balance_hosts=true). The driver discovers nodes via yb_servers()
+    # and spreads connections across the cluster, so per-process search workers don't
+    # all land on the configured host. Defaults to False so plain PostgreSQL works out
+    # of the box (yb_servers() does not exist there); the YugabyteDB runner should set
+    # this True explicitly in its config.
+    load_balance: bool = False
+    # Optional YB smart-driver topology hint, e.g. "cloud.region.zone" (comma-separated
+    # for multiple). None = balance across all nodes.
+    topology_keys: str | None = None
 
     def to_dict(self) -> PgVectorConfigDict:
-        user_str = self.user_name.get_secret_value()
+        user_str = self.user_name.get_secret_value() if isinstance(self.user_name, SecretStr) else self.user_name
         pwd_str = self.password.get_secret_value()
         return {
-            "host": self.host,
-            "port": self.port,
-            "dbname": self.db_name,
-            "user": user_str,
-            "password": pwd_str,
+            "connect_config": {
+                "host": self.host,
+                "port": self.port,
+                "dbname": self.db_name,
+                "user": user_str,
+                "password": pwd_str,
+                "load_balance": self.load_balance,
+                "topology_keys": self.topology_keys,
+            },
+            "table_name": self.table_name,
         }
 
 
@@ -43,8 +66,8 @@ class PgVectorIndexParam(TypedDict):
     metric: str
     index_type: str
     index_creation_with_options: Sequence[dict[str, Any]]
-    maintenance_work_mem: str | None
-    max_parallel_workers: int | None
+    maintenance_work_mem: str | None = None
+    max_parallel_workers: int | None = None
 
 
 class PgVectorSearchParam(TypedDict):
@@ -59,6 +82,11 @@ class PgVectorIndexConfig(BaseModel, DBCaseConfig):
     metric_type: MetricType | None = None
     create_index_before_load: bool = False
     create_index_after_load: bool = True
+    # Scan more of the index to get enough results for filter-cases.
+    # Options: "strict_order" (order by distance), "relaxed_order" (slightly out of order but better recall)
+    # See: https://github.com/pgvector/pgvector?tab=readme-ov-file#iterative-index-scans
+    iterative_scan: str = "relaxed_order"
+    deep1b_dataset_percentage: float | None = None
 
     def parse_metric(self) -> str:
         d = {
@@ -80,7 +108,12 @@ class PgVectorIndexConfig(BaseModel, DBCaseConfig):
 
         if d.get(self.quantization_type) is None:
             return d.get("_fallback").get(self.metric_type)
-        return d.get(self.quantization_type).get(self.metric_type)
+        metric = d.get(self.quantization_type).get(self.metric_type)
+        # If using binary quantization for the index, use a bit metric
+        # no matter what metric was selected for vector or halfvec data
+        if self.quantization_type == "bit" and metric is None:
+            return "bit_hamming_ops"
+        return metric
 
     def parse_metric_fun_op(self) -> LiteralString:
         if self.quantization_type == "bit":
@@ -162,20 +195,25 @@ class PgVectorIVFFlatConfig(PgVectorIndexConfig):
     a good place to start is sqrt(lists)
     """
 
-    lists: int | None
-    probes: int | None
+    lists: int | None = None
+    probes: int | None = None
     index: IndexType = IndexType.ES_IVFFlat
     maintenance_work_mem: str | None = None
     max_parallel_workers: int | None = None
     quantization_type: str | None = None
+    table_quantization_type: str | None = None
     reranking: bool | None = None
     quantized_fetch_limit: int | None = None
     reranking_metric: str | None = None
 
     def index_param(self) -> PgVectorIndexParam:
         index_parameters = {"lists": self.lists}
-        if self.quantization_type == "none":
-            self.quantization_type = None
+        if self.quantization_type == "none" or self.quantization_type is None:
+            self.quantization_type = "vector"
+        if self.table_quantization_type == "none" or self.table_quantization_type is None:
+            self.table_quantization_type = "vector"
+        if self.table_quantization_type == "bit":
+            self.quantization_type = "bit"
         return {
             "metric": self.parse_metric(),
             "index_type": self.index.value,
@@ -183,6 +221,7 @@ class PgVectorIVFFlatConfig(PgVectorIndexConfig):
             "maintenance_work_mem": self.maintenance_work_mem,
             "max_parallel_workers": self.max_parallel_workers,
             "quantization_type": self.quantization_type,
+            "table_quantization_type": self.table_quantization_type,
         }
 
     def search_param(self) -> PgVectorSearchParam:
@@ -194,7 +233,7 @@ class PgVectorIVFFlatConfig(PgVectorIndexConfig):
         }
 
     def session_param(self) -> PgVectorSessionCommands:
-        session_parameters = {"ivfflat.probes": self.probes}
+        session_parameters = {"ivfflat.probes": self.probes, "ivfflat.iterative_scan": self.iterative_scan}
         return {"session_options": self._optionally_build_set_options(session_parameters)}
 
 
@@ -207,19 +246,24 @@ class PgVectorHNSWConfig(PgVectorIndexConfig):
 
     m: int | None  # DETAIL:  Valid values are between "2" and "100".
     ef_construction: int | None  # ef_construction must be greater than or equal to 2 * m
-    ef_search: int | None
+    ef_search: int | None = None
     index: IndexType = IndexType.ES_HNSW
     maintenance_work_mem: str | None = None
     max_parallel_workers: int | None = None
     quantization_type: str | None = None
+    table_quantization_type: str | None = None
     reranking: bool | None = None
     quantized_fetch_limit: int | None = None
     reranking_metric: str | None = None
 
     def index_param(self) -> PgVectorIndexParam:
         index_parameters = {"m": self.m, "ef_construction": self.ef_construction}
-        if self.quantization_type == "none":
-            self.quantization_type = None
+        if self.quantization_type == "none" or self.quantization_type is None:
+            self.quantization_type = "vector"
+        if self.table_quantization_type == "none" or self.table_quantization_type is None:
+            self.table_quantization_type = "vector"
+        if self.table_quantization_type == "bit":
+            self.quantization_type = "bit"
         return {
             "metric": self.parse_metric(),
             "index_type": self.index.value,
@@ -227,6 +271,7 @@ class PgVectorHNSWConfig(PgVectorIndexConfig):
             "maintenance_work_mem": self.maintenance_work_mem,
             "max_parallel_workers": self.max_parallel_workers,
             "quantization_type": self.quantization_type,
+            "table_quantization_type": self.table_quantization_type,
         }
 
     def search_param(self) -> PgVectorSearchParam:
@@ -238,7 +283,7 @@ class PgVectorHNSWConfig(PgVectorIndexConfig):
         }
 
     def session_param(self) -> PgVectorSessionCommands:
-        session_parameters = {"hnsw.ef_search": self.ef_search}
+        session_parameters = {"hnsw.ef_search": self.ef_search, "hnsw.iterative_scan": self.iterative_scan}
         return {"session_options": self._optionally_build_set_options(session_parameters)}
 
 

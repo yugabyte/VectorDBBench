@@ -38,6 +38,11 @@ class WeaviateCloud(VectorDB):
         self._vector_field = "vector"
         self._index_name = "vector_idx"
 
+        # If local setup is used, we
+        if db_config["no_auth"]:
+            del db_config["auth_client_secret"]
+        del db_config["no_auth"]
+
         from weaviate import Client
 
         client = Client(**db_config)
@@ -99,7 +104,7 @@ class WeaviateCloud(VectorDB):
         embeddings: Iterable[list[float]],
         metadata: list[int],
         **kwargs,
-    ) -> (int, Exception):
+    ) -> tuple[int, Exception]:
         """Insert embeddings into Weaviate"""
         assert self.client.schema.exists(self.collection_name)
         insert_count = 0

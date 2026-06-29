@@ -1,9 +1,8 @@
 import logging
-import os
 import time
 from collections.abc import Callable
-from concurrent.futures import wait
 from datetime import datetime
+from pathlib import Path
 from pprint import pformat
 from typing import (
     Annotated,
@@ -17,11 +16,11 @@ from typing import (
 import click
 from yaml import load
 
-from vectordb_bench.backend.clients.api import MetricType
-
 from .. import config
 from ..backend.clients import DB
-from ..interface import benchmark_runner, global_result_future
+from ..backend.clients.api import MetricType
+from ..backend.dataset import DatasetWithSizeType
+from ..interface import benchmark_runner
 from ..models import (
     CaseConfig,
     CaseType,
@@ -37,19 +36,32 @@ try:
 except ImportError:
     from yaml import Loader
 
+DEFAULT_DATASET_WITH_SIZE_TYPE = DatasetWithSizeType.CohereMedium.value
+SUPPORTED_DATASET_WITH_SIZE_TYPES = "|".join(dataset.value for dataset in DatasetWithSizeType)
 
-def click_get_defaults_from_file(ctx, param, value):
+
+def copy_if_not_none(
+    custom_case_config: dict[str, Any],
+    parameters: dict[str, Any],
+    key: str,
+    target_key: str | None = None,
+) -> None:
+    value = parameters[key]
+    if value is not None:
+        custom_case_config[target_key or key] = value
+
+
+def click_get_defaults_from_file(ctx, param, value):  # noqa: ANN001, ARG001
     if value:
-        if os.path.exists(value):
-            input_file = value
-        else:
-            input_file = os.path.join(config.CONFIG_LOCAL_DIR, value)
+        path = Path(value)
+        input_file = path if path.exists() else Path(config.CONFIG_LOCAL_DIR, path)
         try:
-            with open(input_file) as f:
-                _config: dict[str, dict[str, Any]] = load(f.read(), Loader=Loader)
+            with input_file.open() as f:
+                _config: dict[str, dict[str, Any]] = load(f.read(), Loader=Loader)  # noqa: S506
                 ctx.default_map = _config.get(ctx.command.name, {})
         except Exception as e:
-            raise click.BadParameter(f"Failed to load config file: {e}")
+            msg = f"Failed to load config file: {e}"
+            raise click.BadParameter(msg) from e
     return value
 
 
@@ -68,12 +80,16 @@ def click_parameter_decorators_from_typed_dict(
 
 
     For clarity, the key names of the TypedDict will be used to determine the type hints for the input parameters.
-    The actual function parameters are controlled by the click.option definitions. You must manually ensure these are aligned in a sensible way!
+    The actual function parameters are controlled by the click.option definitions.
+    You must manually ensure these are aligned in a sensible way!
 
     Example:
     ```
     class CommonTypedDict(TypedDict):
-        z: Annotated[int, click.option("--z/--no-z", is_flag=True, type=bool, help="help z", default=True, show_default=True)]
+        z: Annotated[
+            int,
+            click.option("--z/--no-z", is_flag=True, type=bool, help="help z", default=True, show_default=True)
+        ]
         name: Annotated[str, click.argument("name", required=False, default="Jeff")]
 
     class FooTypedDict(CommonTypedDict):
@@ -91,14 +107,16 @@ def click_parameter_decorators_from_typed_dict(
     for _, t in get_type_hints(typed_dict, include_extras=True).items():
         assert get_origin(t) is Annotated
         if len(t.__metadata__) == 1 and t.__metadata__[0].__module__ == "click.decorators":
-            # happy path -- only accept Annotated[..., Union[click.option,click.argument,...]] with no additional metadata defined (len=1)
+            # happy path -- only accept Annotated[..., Union[click.option,click.argument,...]]
+            # with no additional metadata defined (len=1)
             decorators.append(t.__metadata__[0])
         else:
             raise RuntimeError(
-                "Click-TypedDict decorator parsing must only contain root type and a click decorator like click.option. See docstring",
+                "Click-TypedDict decorator parsing must only contain root type "
+                "and a click decorator like click.option. See docstring",
             )
 
-    def deco(f):
+    def deco(f):  # noqa: ANN001
         for dec in reversed(decorators):
             f = dec(f)
         return f
@@ -106,7 +124,7 @@ def click_parameter_decorators_from_typed_dict(
     return deco
 
 
-def click_arg_split(ctx: click.Context, param: click.core.Option, value):
+def click_arg_split(ctx: click.Context, param: click.core.Option, value: any):  # noqa: ARG001
     """Will split a comma-separated list input into an actual list.
 
     Args:
@@ -145,8 +163,7 @@ def parse_task_stages(
     return stages
 
 
-# ruff: noqa
-def check_custom_case_parameters(ctx: any, param: any, value: any):
+def check_custom_case_parameters(ctx: any, param: any, value: any):  # noqa: ARG001
     if ctx.params.get("case_type") == "PerformanceCustomDataset" and value is None:
         raise click.BadParameter(
             """ Custom case parameters
@@ -163,6 +180,7 @@ are required """,
 
 def get_custom_case_config(parameters: dict) -> dict:
     custom_case_config = {}
+    dataset_with_size_type = parameters["dataset_with_size_type"] or DEFAULT_DATASET_WITH_SIZE_TYPE
     if parameters["case_type"] == "PerformanceCustomDataset":
         custom_case_config = {
             "name": parameters["custom_case_name"],
@@ -180,6 +198,58 @@ def get_custom_case_config(parameters: dict) -> dict:
                 "with_gt": parameters["custom_dataset_with_gt"],
             },
         }
+    elif parameters["case_type"] == "NewIntFilterPerformanceCase":
+        custom_case_config = {
+            "dataset_with_size_type": dataset_with_size_type,
+            "filter_rate": parameters["filter_rate"],
+        }
+    elif parameters["case_type"] == "LabelFilterPerformanceCase":
+        custom_case_config = {
+            "dataset_with_size_type": dataset_with_size_type,
+            "label_percentage": parameters["label_percentage"],
+        }
+    elif parameters["case_type"] == "CloudPayloadSearchCase":
+        custom_case_config = {
+            "payload_profile": parameters["payload_profile"],
+        }
+        copy_if_not_none(custom_case_config, parameters, "dataset_with_size_type")
+        if parameters["cloud_filter_rate"] is not None:
+            custom_case_config["filter_rate"] = parameters["cloud_filter_rate"]
+        if parameters["cloud_label_percentage"] is not None:
+            custom_case_config["label_percentage"] = parameters["cloud_label_percentage"]
+    elif parameters["case_type"] == "CloudColdLatencyCase":
+        custom_case_config = {
+            "payload_profile": parameters["payload_profile"],
+            "query_count": parameters["cloud_cold_query_count"],
+        }
+        copy_if_not_none(custom_case_config, parameters, "dataset_with_size_type")
+        copy_if_not_none(custom_case_config, parameters, "cloud_filter_rate", "filter_rate")
+        copy_if_not_none(custom_case_config, parameters, "cloud_label_percentage", "label_percentage")
+    elif parameters["case_type"] == "CloudInsertCase":
+        custom_case_config = {
+            "batch_size": parameters["cloud_insert_batch_size"],
+            "duration": parameters["cloud_insert_duration"],
+            "dataset_with_size_type": dataset_with_size_type,
+        }
+        copy_if_not_none(custom_case_config, parameters, "cloud_insert_readiness_timeout", "readiness_timeout")
+        copy_if_not_none(
+            custom_case_config,
+            parameters,
+            "cloud_insert_readiness_poll_interval",
+            "readiness_poll_interval",
+        )
+    elif parameters["case_type"] == "CloudMultiTenantSearchCase":
+        custom_case_config = {
+            "tenant_count": parameters["tenant_count"],
+            "tenant_prefix": parameters["tenant_prefix"],
+            "tenant_id_width": parameters["tenant_id_width"],
+            "payload_profile": parameters["payload_profile"],
+        }
+        copy_if_not_none(custom_case_config, parameters, "dataset_with_size_type")
+        if parameters["cloud_filter_rate"] is not None:
+            custom_case_config["filter_rate"] = parameters["cloud_filter_rate"]
+        if parameters["cloud_label_percentage"] is not None:
+            custom_case_config["label_percentage"] = parameters["cloud_label_percentage"]
     return custom_case_config
 
 
@@ -216,6 +286,16 @@ class CommonTypedDict(TypedDict):
             default=True,
             help="Load or skip",
             show_default=True,
+        ),
+    ]
+    load_concurrency: Annotated[
+        int,
+        click.option(
+            "--load-concurrency",
+            type=int,
+            default=config.LOAD_CONCURRENCY,
+            show_default=True,
+            help="Number of concurrent workers for data loading in performance cases (0 = cpu_count)",
         ),
     ]
     search_serial: Annotated[
@@ -297,6 +377,17 @@ class CommonTypedDict(TypedDict):
             show_default=True,
             default=",".join(map(str, config.NUM_CONCURRENCY)),
             callback=lambda *args: list(map(int, click_arg_split(*args))),
+        ),
+    ]
+    concurrency_timeout: Annotated[
+        int,
+        click.option(
+            "--concurrency-timeout",
+            type=int,
+            default=config.CONCURRENCY_TIMEOUT,
+            show_default=True,
+            help="Timeout (in seconds) to wait for a concurrency slot before failing. "
+            "Set to a negative value to wait indefinitely.",
         ),
     ]
     custom_case_name: Annotated[
@@ -401,6 +492,149 @@ class CommonTypedDict(TypedDict):
             show_default=True,
         ),
     ]
+    task_label: Annotated[str, click.option("--task-label", help="Task label")]
+    dataset_with_size_type: Annotated[
+        str | None,
+        click.option(
+            "--dataset-with-size-type",
+            help="Dataset with size type. When omitted, filter/insert cases use Medium Cohere (768dim, 1M), "
+            "CloudPayloadSearchCase and CloudColdLatencyCase use LAION 100M, and CloudMultiTenantSearchCase "
+            f"uses Large Cohere (768dim, 10M). Supported values include {SUPPORTED_DATASET_WITH_SIZE_TYPES}",
+            default=None,
+        ),
+    ]
+    filter_rate: Annotated[
+        float,
+        click.option(
+            "--filter-rate",
+            help="Filter rate for NewIntFilterPerformanceCase",
+            default=0.01,
+            show_default=True,
+        ),
+    ]
+    label_percentage: Annotated[
+        float,
+        click.option(
+            "--label-percentage",
+            help="Filter rate for LabelFilterPerformanceCase",
+            default=0.01,
+            show_default=True,
+        ),
+    ]
+    payload_profile: Annotated[
+        str,
+        click.option(
+            "--payload-profile",
+            type=click.Choice(["ids_only", "vector", "scalar_label"]),
+            help="Response payload profile for CloudPayloadSearchCase and CloudColdLatencyCase",
+            default="ids_only",
+            show_default=True,
+        ),
+    ]
+    cloud_filter_rate: Annotated[
+        float | None,
+        click.option(
+            "--cloud-filter-rate",
+            type=float,
+            default=None,
+            help="Optional int filter rate for CloudPayloadSearchCase and CloudColdLatencyCase",
+        ),
+    ]
+    cloud_label_percentage: Annotated[
+        float | None,
+        click.option(
+            "--cloud-label-percentage",
+            type=float,
+            default=None,
+            help="Optional label percentage for CloudPayloadSearchCase and CloudColdLatencyCase",
+        ),
+    ]
+    cloud_cold_query_count: Annotated[
+        int,
+        click.option(
+            "--cloud-cold-query-count",
+            type=int,
+            default=1000,
+            show_default=True,
+            help="Number of serial queries per cold/warm pass for CloudColdLatencyCase",
+        ),
+    ]
+    cloud_insert_batch_size: Annotated[
+        int,
+        click.option(
+            "--cloud-insert-batch-size",
+            type=int,
+            default=5000,
+            show_default=True,
+            help="Insert batch size for CloudInsertCase",
+        ),
+    ]
+    cloud_insert_duration: Annotated[
+        float | None,
+        click.option(
+            "--cloud-insert-duration",
+            type=float,
+            default=None,
+            help="Optional insert duration in seconds for CloudInsertCase",
+        ),
+    ]
+    cloud_insert_readiness_timeout: Annotated[
+        float | None,
+        click.option(
+            "--cloud-insert-readiness-timeout",
+            type=float,
+            default=None,
+            help="Optional readiness polling timeout in seconds for CloudInsertCase",
+        ),
+    ]
+    cloud_insert_readiness_poll_interval: Annotated[
+        float | None,
+        click.option(
+            "--cloud-insert-readiness-poll-interval",
+            type=float,
+            default=None,
+            help="Optional readiness polling interval in seconds for CloudInsertCase",
+        ),
+    ]
+    tenant_count: Annotated[
+        int,
+        click.option(
+            "--tenant-count",
+            type=int,
+            default=1000,
+            show_default=True,
+            help="Tenant count for CloudMultiTenantSearchCase",
+        ),
+    ]
+    tenant_prefix: Annotated[
+        str,
+        click.option(
+            "--tenant-prefix",
+            type=str,
+            default="tenant_",
+            show_default=True,
+            help="Tenant label prefix for CloudMultiTenantSearchCase",
+        ),
+    ]
+    tenant_id_width: Annotated[
+        int,
+        click.option(
+            "--tenant-id-width",
+            type=int,
+            default=4,
+            show_default=True,
+            help="Zero-padding width for CloudMultiTenantSearchCase tenant IDs",
+        ),
+    ]
+    deep1b_dataset_percentage: Annotated[
+        float,
+        click.option(
+            "--deep1b-dataset-percentage",
+            help="Percentage of Deep1B dataset to use (0.0 to 1.0, default: 1.0 = 100%)",
+            default=config.DEEP1B_DATASET_PERCENTAGE,
+            show_default=True,
+        ),
+    ]
 
 
 class HNSWBaseTypedDict(TypedDict):
@@ -440,6 +674,49 @@ class HNSWFlavor3(HNSWBaseRequiredTypedDict):
     ]
 
 
+class HNSWFlavor4(HNSWBaseRequiredTypedDict):
+    ef_search: Annotated[
+        int | None,
+        click.option("--ef-search", type=int, help="hnsw ef-search", required=True),
+    ]
+    index_type: Annotated[
+        str | None,
+        click.option(
+            "--index-type",
+            type=click.Choice(["HNSW", "HNSW_SQ", "HNSW_BQ"], case_sensitive=False),
+            help="Type of index to use. Supported values: HNSW, HNSW_SQ, HNSW_BQ",
+            required=True,
+        ),
+    ]
+
+
+class HNSWFlavor5(HNSWBaseRequiredTypedDict):
+    ef_search: Annotated[
+        int | None,
+        click.option("--ef-search", type=int, help="hnsw ef-search", required=True),
+    ]
+    index_type: Annotated[
+        str | None,
+        click.option(
+            "--index-type",
+            type=click.Choice(["HGraph"], case_sensitive=True),
+            help="Type of index to use. Supported values: HGraph",
+            required=True,
+        ),
+    ]
+    use_reorder: Annotated[
+        bool,
+        click.option(
+            "--use-reorder/--no-use-reorder",
+            is_flag=True,
+            type=bool,
+            help="use reorder index",
+            default=True,
+            show_default=True,
+        ),
+    ]
+
+
 class IVFFlatTypedDict(TypedDict):
     lists: Annotated[int | None, click.option("--lists", type=int, help="ivfflat lists")]
     probes: Annotated[int | None, click.option("--probes", type=int, help="ivfflat probes")]
@@ -453,6 +730,57 @@ class IVFFlatTypedDictN(TypedDict):
     nprobe: Annotated[
         int | None,
         click.option("--probes", "nprobe", type=int, help="ivfflat probes", required=True),
+    ]
+
+
+class OceanBaseIVFTypedDict(TypedDict):
+    index_type: Annotated[
+        str | None,
+        click.option(
+            "--index-type",
+            type=click.Choice(["IVF_FLAT", "IVF_SQ8", "IVF_PQ"], case_sensitive=False),
+            help="Type of index to use. Supported values: IVF_FLAT, IVF_SQ8, IVF_PQ",
+            required=True,
+        ),
+    ]
+    nlist: Annotated[
+        int | None,
+        click.option("--nlist", "nlist", type=int, help="Number of cluster centers", required=True),
+    ]
+    nbits: Annotated[
+        int | None,
+        click.option(
+            "--nbits",
+            "nbits",
+            type=int,
+            help="Number of bits used to encode the index of a sub-vector's centroid in the compressed representation",
+        ),
+    ]
+    sample_per_nlist: Annotated[
+        int | None,
+        click.option(
+            "--sample_per_nlist",
+            "sample_per_nlist",
+            type=int,
+            help="The cluster centers are calculated by total sampling sample_per_nlist * nlist vectors",
+            required=True,
+        ),
+    ]
+    ivf_nprobes: Annotated[
+        int | None,
+        click.option(
+            "--ivf_nprobes",
+            "ivf_nprobes",
+            type=str,
+            help="How many clustering centers to search during the query",
+            required=True,
+        ),
+    ]
+    m: Annotated[
+        int | None,
+        click.option(
+            "--m", "m", type=int, help="The number of sub-vectors that each data vector is divided into during IVF-PQ"
+        ),
     ]
 
 
@@ -474,6 +802,17 @@ def run(
         db_case_config (DBCaseConfig)
         **parameters: expects keys from CommonTypedDict
     """
+    # Resolve the Deep1B dataset percentage (accept both underscore and dash keys),
+    # mirroring it into the global config so dataset readers can pick it up as a fallback.
+    deep1b_dataset_percentage = None
+    for key in ["deep1b_dataset_percentage", "deep1b-dataset-percentage"]:
+        if parameters.get(key) is not None:
+            try:
+                deep1b_dataset_percentage = float(parameters[key])
+                config.DEEP1B_DATASET_PERCENTAGE = deep1b_dataset_percentage
+                break
+            except (TypeError, ValueError) as e:
+                log.warning(f"Could not parse {key}={parameters[key]!r}: {e}")
 
     task = TaskConfig(
         db=db,
@@ -485,6 +824,7 @@ def run(
             concurrency_search_config=ConcurrencySearchConfig(
                 concurrency_duration=parameters["concurrency_duration"],
                 num_concurrency=[int(s) for s in parameters["num_concurrency"]],
+                concurrency_timeout=parameters["concurrency_timeout"],
             ),
             custom_case=get_custom_case_config(parameters),
         ),
@@ -494,11 +834,17 @@ def run(
             parameters["search_serial"],
             parameters["search_concurrent"],
         ),
+        load_concurrency=parameters["load_concurrency"],
+        deep1b_dataset_percentage=deep1b_dataset_percentage,
     )
+    task_label = parameters["task_label"]
 
     log.info(f"Task:\n{pformat(task)}\n")
     if not parameters["dry_run"]:
-        benchmark_runner.run([task])
-        time.sleep(5)
-        if global_result_future:
-            wait([global_result_future])
+        benchmark_runner.run([task], task_label)
+        try:
+            while benchmark_runner.has_running():
+                time.sleep(1)
+        except KeyboardInterrupt:
+            log.warning("Ctrl+C received, stopping benchmark...")
+            benchmark_runner.stop_running()

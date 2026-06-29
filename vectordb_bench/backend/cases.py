@@ -1,14 +1,15 @@
+import json
 import logging
 from enum import Enum, auto
 
 from vectordb_bench import config
 from vectordb_bench.backend.clients.api import MetricType
+from vectordb_bench.backend.filter import Filter, FilterOp, IntFilter, LabelFilter, NewIntFilter, NonFilter, non_filter
+from vectordb_bench.backend.payload import PayloadProfile
 from vectordb_bench.base import BaseModel
-from vectordb_bench.frontend.components.custom.getCustomConfig import (
-    CustomDatasetConfig,
-)
+from vectordb_bench.frontend.components.custom.getCustomConfig import CustomDatasetConfig
 
-from .dataset import CustomDataset, Dataset, DatasetManager
+from .dataset import CustomDataset, Dataset, DatasetManager, DatasetWithSizeType
 
 log = logging.getLogger(__name__)
 
@@ -42,10 +43,27 @@ class CaseType(Enum):
     Performance1536D500K99P = 14
     Performance1536D5M99P = 15
 
+    Performance1024D1M = 17
+    Performance1024D10M = 20
+
     Performance1536D50K = 50
+
+    # Deep1B dataset cases
+    Performance96D1B = 60
 
     Custom = 100
     PerformanceCustomDataset = 101
+
+    StreamingPerformanceCase = 200
+    StreamingCustomDataset = 201
+
+    LabelFilterPerformanceCase = 300
+
+    NewIntFilterPerformanceCase = 400
+    CloudPayloadSearchCase = 500
+    CloudInsertCase = 600
+    CloudColdLatencyCase = 700
+    CloudMultiTenantSearchCase = 800
 
     def case_cls(self, custom_configs: dict | None = None) -> type["Case"]:
         if custom_configs is None:
@@ -68,6 +86,9 @@ class CaseType(Enum):
 class CaseLabel(Enum):
     Load = auto()
     Performance = auto()
+    Streaming = auto()
+    CloudInsert = auto()
+    CloudColdLatency = auto()
 
 
 class Case(BaseModel):
@@ -87,35 +108,52 @@ class Case(BaseModel):
     description: str
     dataset: DatasetManager
 
-    load_timeout: float | int
+    load_timeout: float | int | None = None
     optimize_timeout: float | int | None = None
 
     filter_rate: float | None = None
+    payload_profile: PayloadProfile = PayloadProfile.IDS_ONLY
 
     @property
-    def filters(self) -> dict | None:
-        if self.filter_rate is not None:
-            target_id = round(self.filter_rate * self.dataset.data.size)
-            return {
-                "metadata": f">={target_id}",
-                "id": target_id,
-            }
+    def filters(self) -> Filter:
+        return non_filter
 
-        return None
+    def estimated_payload_bytes_per_query(self, k: int | None) -> int:
+        if k is None:
+            k = config.K_DEFAULT
+        return self.payload_profile.estimated_bytes_per_query(k=k, dim=self.dataset.data.dim)
+
+    @property
+    def is_multitenant(self) -> bool:
+        return False
+
+    @property
+    def with_scalar_labels(self) -> bool:
+        return self.filters.type == FilterOp.StrEqual or self.payload_profile == PayloadProfile.SCALAR_LABEL
+
+    def check_scalar_labels(self) -> None:
+        if self.with_scalar_labels and not self.dataset.data.with_scalar_labels:
+            msg = f"Case init failed: no scalar_labels data in current dataset ({self.dataset.data.full_name})"
+            raise ValueError(msg)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.check_scalar_labels()
 
 
-class CapacityCase(Case, BaseModel):
+class CapacityCase(Case):
     label: CaseLabel = CaseLabel.Load
     filter_rate: float | None = None
     load_timeout: float | int = config.CAPACITY_TIMEOUT_IN_SECONDS
     optimize_timeout: float | int | None = None
 
 
-class PerformanceCase(Case, BaseModel):
+class PerformanceCase(Case):
     label: CaseLabel = CaseLabel.Performance
     filter_rate: float | None = None
     load_timeout: float | int = config.LOAD_TIMEOUT_DEFAULT
     optimize_timeout: float | int | None = config.OPTIMIZE_TIMEOUT_DEFAULT
+    int_value: float | None = None
 
 
 class CapacityDim960(CapacityCase):
@@ -147,6 +185,14 @@ class Performance768D10M(PerformanceCase):
     optimize_timeout: float | int | None = config.OPTIMIZE_TIMEOUT_768D_10M
 
 
+class IntFilterPerformanceCase(PerformanceCase):
+    @property
+    def filters(self) -> Filter:
+        int_field = self.dataset.data.train_id_field
+        int_value = int(self.dataset.data.size * self.filter_rate)
+        return IntFilter(filter_rate=self.filter_rate, int_field=int_field, int_value=int_value)
+
+
 class Performance768D1M(PerformanceCase):
     case_id: CaseType = CaseType.Performance768D1M
     dataset: DatasetManager = Dataset.COHERE.manager(1_000_000)
@@ -158,7 +204,7 @@ class Performance768D1M(PerformanceCase):
     optimize_timeout: float | int | None = config.OPTIMIZE_TIMEOUT_768D_1M
 
 
-class Performance768D10M1P(PerformanceCase):
+class Performance768D10M1P(IntFilterPerformanceCase):
     case_id: CaseType = CaseType.Performance768D10M1P
     filter_rate: float | int | None = 0.01
     dataset: DatasetManager = Dataset.COHERE.manager(10_000_000)
@@ -170,7 +216,7 @@ class Performance768D10M1P(PerformanceCase):
     optimize_timeout: float | int | None = config.OPTIMIZE_TIMEOUT_768D_10M
 
 
-class Performance768D1M1P(PerformanceCase):
+class Performance768D1M1P(IntFilterPerformanceCase):
     case_id: CaseType = CaseType.Performance768D1M1P
     filter_rate: float | int | None = 0.01
     dataset: DatasetManager = Dataset.COHERE.manager(1_000_000)
@@ -182,7 +228,7 @@ class Performance768D1M1P(PerformanceCase):
     optimize_timeout: float | int | None = config.OPTIMIZE_TIMEOUT_768D_1M
 
 
-class Performance768D10M99P(PerformanceCase):
+class Performance768D10M99P(IntFilterPerformanceCase):
     case_id: CaseType = CaseType.Performance768D10M99P
     filter_rate: float | int | None = 0.99
     dataset: DatasetManager = Dataset.COHERE.manager(10_000_000)
@@ -194,7 +240,7 @@ class Performance768D10M99P(PerformanceCase):
     optimize_timeout: float | int | None = config.OPTIMIZE_TIMEOUT_768D_10M
 
 
-class Performance768D1M99P(PerformanceCase):
+class Performance768D1M99P(IntFilterPerformanceCase):
     case_id: CaseType = CaseType.Performance768D1M99P
     filter_rate: float | int | None = 0.99
     dataset: DatasetManager = Dataset.COHERE.manager(1_000_000)
@@ -242,7 +288,7 @@ class Performance1536D5M(PerformanceCase):
     optimize_timeout: float | int | None = config.OPTIMIZE_TIMEOUT_1536D_5M
 
 
-class Performance1536D500K1P(PerformanceCase):
+class Performance1536D500K1P(IntFilterPerformanceCase):
     case_id: CaseType = CaseType.Performance1536D500K1P
     filter_rate: float | int | None = 0.01
     dataset: DatasetManager = Dataset.OPENAI.manager(500_000)
@@ -254,7 +300,7 @@ class Performance1536D500K1P(PerformanceCase):
     optimize_timeout: float | int | None = config.OPTIMIZE_TIMEOUT_1536D_500K
 
 
-class Performance1536D5M1P(PerformanceCase):
+class Performance1536D5M1P(IntFilterPerformanceCase):
     case_id: CaseType = CaseType.Performance1536D5M1P
     filter_rate: float | int | None = 0.01
     dataset: DatasetManager = Dataset.OPENAI.manager(5_000_000)
@@ -266,7 +312,7 @@ class Performance1536D5M1P(PerformanceCase):
     optimize_timeout: float | int | None = config.OPTIMIZE_TIMEOUT_1536D_5M
 
 
-class Performance1536D500K99P(PerformanceCase):
+class Performance1536D500K99P(IntFilterPerformanceCase):
     case_id: CaseType = CaseType.Performance1536D500K99P
     filter_rate: float | int | None = 0.99
     dataset: DatasetManager = Dataset.OPENAI.manager(500_000)
@@ -278,7 +324,7 @@ class Performance1536D500K99P(PerformanceCase):
     optimize_timeout: float | int | None = config.OPTIMIZE_TIMEOUT_1536D_500K
 
 
-class Performance1536D5M99P(PerformanceCase):
+class Performance1536D5M99P(IntFilterPerformanceCase):
     case_id: CaseType = CaseType.Performance1536D5M99P
     filter_rate: float | int | None = 0.99
     dataset: DatasetManager = Dataset.OPENAI.manager(5_000_000)
@@ -288,6 +334,30 @@ class Performance1536D5M99P(PerformanceCase):
     at varying parallel levels. Results will show index building time, recall, and maximum QPS."""
     load_timeout: float | int = config.LOAD_TIMEOUT_1536D_5M
     optimize_timeout: float | int | None = config.OPTIMIZE_TIMEOUT_1536D_5M
+
+
+class Performance1024D1M(PerformanceCase):
+    case_id: CaseType = CaseType.Performance1024D1M
+    filter_rate: float | int | None = None
+    dataset: DatasetManager = Dataset.BIOASQ.manager(1_000_000)
+    name: str = "Search Performance Test (1M Dataset, 1024 Dim)"
+    description: str = """This case tests the search performance of a vector database with a medium 1M dataset
+    (<b>Bioasq 1M vectors</b>, 1024 dimensions), at varying parallel levels. Results will show index building time,
+    recall, and maximum QPS."""
+    load_timeout: float | int = config.LOAD_TIMEOUT_1024D_1M
+    optimize_timeout: float | int | None = config.OPTIMIZE_TIMEOUT_1024D_1M
+
+
+class Performance1024D10M(PerformanceCase):
+    case_id: CaseType = CaseType.Performance1024D10M
+    filter_rate: float | int | None = None
+    dataset: DatasetManager = Dataset.BIOASQ.manager(10_000_000)
+    name: str = "Search Performance Test (10M Dataset, 1024 Dim)"
+    description: str = """This case tests the search performance of a vector database with a large 10M dataset
+    (<b>Bioasq 10M vectors</b>, 1024 dimensions), at varying parallel levels. Results will show index building time,
+    recall, and maximum QPS."""
+    load_timeout: float | int = config.LOAD_TIMEOUT_1024D_10M
+    optimize_timeout: float | int | None = config.OPTIMIZE_TIMEOUT_1024D_10M
 
 
 class Performance1536D50K(PerformanceCase):
@@ -300,6 +370,18 @@ class Performance1536D50K(PerformanceCase):
     recall, and maximum QPS."""
     load_timeout: float | int = 3600
     optimize_timeout: float | int | None = config.OPTIMIZE_TIMEOUT_DEFAULT
+
+
+class Performance96D1B(PerformanceCase):
+    case_id: CaseType = CaseType.Performance96D1B
+    filter_rate: float | int | None = None
+    dataset: DatasetManager = Dataset.DEEP1B.manager(1_000_000_000)
+    name: str = "Search Performance Test (1B Dataset, 96 Dim)"
+    description: str = """This case tests the search performance of a vector database with a very large 1B dataset
+    (<b>Deep1B 1B vectors</b>, 96 dimensions), at varying parallel levels. Results will show index building time,
+    recall, and maximum QPS."""
+    load_timeout: float | int = config.LOAD_TIMEOUT_96D_1B
+    optimize_timeout: float | int | None = config.OPTIMIZE_TIMEOUT_96D_1B
 
 
 def metric_type_map(s: str) -> MetricType:
@@ -318,7 +400,10 @@ class PerformanceCustomDataset(PerformanceCase):
     case_id: CaseType = CaseType.PerformanceCustomDataset
     name: str = "Performance With Custom Dataset"
     description: str = ""
+    gt_file: str
     dataset: DatasetManager
+    label_percentage: float | None = None
+    use_filter: bool
 
     def __init__(
         self,
@@ -327,6 +412,8 @@ class PerformanceCustomDataset(PerformanceCase):
         load_timeout: float,
         optimize_timeout: float,
         dataset_config: dict,
+        label_percentage: float | None = None,
+        use_filter: bool = False,
         **kwargs,
     ):
         dataset_config = CustomDatasetConfig(**dataset_config)
@@ -339,14 +426,494 @@ class PerformanceCustomDataset(PerformanceCase):
             with_gt=dataset_config.with_gt,
             dir=dataset_config.dir,
             file_num=dataset_config.file_count,
+            train_file=dataset_config.train_name,
+            test_file=f"{dataset_config.test_name}.parquet",
+            train_id_field=dataset_config.train_id_name,
+            train_vector_field=dataset_config.train_col_name,
+            test_vector_field=dataset_config.test_col_name,
+            gt_neighbors_field=dataset_config.gt_col_name,
+            scalar_labels_file=f"{dataset_config.scalar_labels_name}.parquet",
         )
         super().__init__(
             name=name,
             description=description,
             load_timeout=load_timeout,
             optimize_timeout=optimize_timeout,
+            gt_file=f"{dataset_config.gt_name}.parquet",
             dataset=DatasetManager(data=dataset),
+            use_filter=use_filter,
+            label_percentage=label_percentage,
         )
+
+    @property
+    def filters(self) -> Filter:
+        if self.use_filter is True:
+            return LabelFilter(label_percentage=self.label_percentage)
+        return NonFilter(gt_file_name=self.gt_file)
+
+
+class StreamingPerformanceCase(Case):
+    case_id: CaseType = CaseType.StreamingPerformanceCase
+    label: CaseLabel = CaseLabel.Streaming
+    dataset_with_size_type: DatasetWithSizeType
+    insert_rate: int
+    search_stages: list[float]
+    concurrencies: list[int]
+    optimize_after_write: bool = True
+    read_dur_after_write: int = 30
+
+    def __init__(
+        self,
+        dataset_with_size_type: DatasetWithSizeType | str = DatasetWithSizeType.CohereSmall.value,
+        insert_rate: int = 500,
+        search_stages: list[float] | str = (0.5, 0.8),
+        concurrencies: list[int] | str = (5, 10),
+        **kwargs,
+    ):
+        num_per_batch = config.NUM_PER_BATCH
+        if insert_rate % config.NUM_PER_BATCH != 0:
+            _insert_rate = max(
+                num_per_batch,
+                insert_rate // num_per_batch * num_per_batch,
+            )
+            log.warning(
+                f"[streaming_case init] insert_rate(={insert_rate}) should be "
+                f"divisible by NUM_PER_BATCH={num_per_batch}), reset to {_insert_rate}",
+            )
+            insert_rate = _insert_rate
+        if not isinstance(dataset_with_size_type, DatasetWithSizeType):
+            dataset_with_size_type = DatasetWithSizeType(dataset_with_size_type)
+        dataset = dataset_with_size_type.get_manager()
+        name = f"Streaming-Perf - {dataset_with_size_type.value}, {insert_rate} rows/s"
+        description = (
+            "This case tests the search performance of vector database while maintaining "
+            f"a fixed insertion speed. (dataset: {dataset_with_size_type.value})"
+        )
+
+        if isinstance(search_stages, str):
+            search_stages = json.loads(search_stages)
+        if isinstance(concurrencies, str):
+            concurrencies = json.loads(concurrencies)
+
+        super().__init__(
+            name=name,
+            description=description,
+            dataset=dataset,
+            dataset_with_size_type=dataset_with_size_type,
+            insert_rate=insert_rate,
+            search_stages=search_stages,
+            concurrencies=concurrencies,
+            **kwargs,
+        )
+
+
+class StreamingCustomDataset(Case):
+    case_id: CaseType = CaseType.StreamingCustomDataset
+    label: CaseLabel = CaseLabel.Streaming
+    name: str = "Streaming Performance With Custom Dataset"
+    description: str = ""
+    dataset: DatasetManager
+    insert_rate: int
+    search_stages: list[float]
+    concurrencies: list[int]
+    optimize_after_write: bool = True
+    read_dur_after_write: int = 30
+
+    def __init__(
+        self,
+        description: str,
+        dataset_config: dict,
+        insert_rate: int = 500,
+        search_stages: list[float] | str = (0.5, 0.8),
+        concurrencies: list[int] | str = (5, 10),
+        optimize_after_write: bool = True,
+        read_dur_after_write: int = 30,
+        **kwargs,
+    ):
+        num_per_batch = config.NUM_PER_BATCH
+        if insert_rate % config.NUM_PER_BATCH != 0:
+            _insert_rate = max(
+                num_per_batch,
+                insert_rate // num_per_batch * num_per_batch,
+            )
+            log.warning(
+                f"[streaming_case init] insert_rate(={insert_rate}) should be "
+                f"divisible by NUM_PER_BATCH={num_per_batch}), reset to {_insert_rate}",
+            )
+            insert_rate = _insert_rate
+
+        dataset_config = CustomDatasetConfig(**dataset_config)
+        dataset = CustomDataset(
+            name=dataset_config.name,
+            size=dataset_config.size,
+            dim=dataset_config.dim,
+            metric_type=metric_type_map(dataset_config.metric_type),
+            use_shuffled=dataset_config.use_shuffled,
+            with_gt=dataset_config.with_gt,
+            dir=dataset_config.dir,
+            file_num=dataset_config.file_count,
+            train_file=dataset_config.train_name,
+            test_file=f"{dataset_config.test_name}.parquet",
+            train_id_field=dataset_config.train_id_name,
+            train_vector_field=dataset_config.train_col_name,
+            test_vector_field=dataset_config.test_col_name,
+            gt_neighbors_field=dataset_config.gt_col_name,
+            scalar_labels_file=f"{dataset_config.scalar_labels_name}.parquet",
+        )
+        name = f"Streaming-Perf - Custom - {dataset_config.name}, {insert_rate} rows/s"
+        description = (
+            description
+            if description
+            else f"This case tests the search performance of vector database while maintaining "
+            f"a fixed insertion speed. (dataset: Custom - {dataset_config.name})"
+        )
+
+        if isinstance(search_stages, str):
+            search_stages = json.loads(search_stages)
+        if isinstance(concurrencies, str):
+            concurrencies = json.loads(concurrencies)
+
+        super().__init__(
+            name=name,
+            description=description,
+            dataset=DatasetManager(data=dataset),
+            insert_rate=insert_rate,
+            search_stages=search_stages,
+            concurrencies=concurrencies,
+            optimize_after_write=optimize_after_write,
+            read_dur_after_write=read_dur_after_write,
+            **kwargs,
+        )
+
+
+class NewIntFilterPerformanceCase(PerformanceCase):
+    case_id: CaseType = CaseType.NewIntFilterPerformanceCase
+    dataset_with_size_type: DatasetWithSizeType
+    filter_rate: float
+
+    def __init__(
+        self,
+        dataset_with_size_type: DatasetWithSizeType | str,
+        filter_rate: float,
+        int_value: float | None = 0,
+        **kwargs,
+    ):
+        if not isinstance(dataset_with_size_type, DatasetWithSizeType):
+            dataset_with_size_type = DatasetWithSizeType(dataset_with_size_type)
+        name = f"Int-Filter-{filter_rate*100:.1f}% - {dataset_with_size_type.value}"
+        description = f"Int-Filter-{filter_rate*100:.1f}% Performance Test ({dataset_with_size_type.value})"
+        dataset = dataset_with_size_type.get_manager()
+        load_timeout = dataset_with_size_type.get_load_timeout()
+        optimize_timeout = dataset_with_size_type.get_optimize_timeout()
+        filters = IntFilter(filter_rate=filter_rate, int_value=int_value)
+        filter_rate = filters.filter_rate
+        super().__init__(
+            name=name,
+            description=description,
+            dataset=dataset,
+            load_timeout=load_timeout,
+            optimize_timeout=optimize_timeout,
+            filter_rate=filter_rate,
+            int_value=int_value,
+            dataset_with_size_type=dataset_with_size_type,
+            **kwargs,
+        )
+
+    @property
+    def filters(self) -> Filter:
+        int_field = self.dataset.data.train_id_field
+        int_value = int(self.dataset.data.size * self.filter_rate)
+        return NewIntFilter(filter_rate=self.filter_rate, int_field=int_field, int_value=int_value)
+
+
+class CloudPayloadSearchCase(PerformanceCase):
+    case_id: CaseType = CaseType.CloudPayloadSearchCase
+    dataset_with_size_type: DatasetWithSizeType | None = None
+    payload_profile: PayloadProfile = PayloadProfile.IDS_ONLY
+    filter_rate: float | None = None
+    label_percentage: float | None = None
+
+    def __init__(
+        self,
+        dataset_with_size_type: DatasetWithSizeType | str | None = None,
+        payload_profile: PayloadProfile | str = PayloadProfile.IDS_ONLY,
+        filter_rate: float | None = None,
+        label_percentage: float | None = None,
+        **kwargs,
+    ):
+        if filter_rate is not None and label_percentage is not None:
+            msg = "CloudPayloadSearchCase supports only one filter type per run"
+            raise ValueError(msg)
+        if dataset_with_size_type is not None and not isinstance(dataset_with_size_type, DatasetWithSizeType):
+            dataset_with_size_type = DatasetWithSizeType(dataset_with_size_type)
+        if not isinstance(payload_profile, PayloadProfile):
+            payload_profile = PayloadProfile(payload_profile)
+
+        if dataset_with_size_type is None:
+            dataset = Dataset.LAION.manager(100_000_000)
+            load_timeout = config.LOAD_TIMEOUT_768D_100M
+            optimize_timeout = config.OPTIMIZE_TIMEOUT_768D_100M
+            dataset_name = "LAION 100M (768dim)"
+        else:
+            dataset = dataset_with_size_type.get_manager()
+            load_timeout = dataset_with_size_type.get_load_timeout()
+            optimize_timeout = dataset_with_size_type.get_optimize_timeout()
+            dataset_name = dataset_with_size_type.value
+
+        name = f"Cloud Payload Search - {payload_profile.value} - {dataset_name}"
+        description = (
+            "Cloud leaderboard search envelope case with explicit response payload profile. "
+            f"Payload profile: {payload_profile.value}; dataset: {dataset_name}."
+        )
+        super().__init__(
+            name=name,
+            description=description,
+            dataset=dataset,
+            load_timeout=load_timeout,
+            optimize_timeout=optimize_timeout,
+            dataset_with_size_type=dataset_with_size_type,
+            payload_profile=payload_profile,
+            filter_rate=filter_rate,
+            label_percentage=label_percentage,
+            **kwargs,
+        )
+
+    @property
+    def filters(self) -> Filter:
+        if self.label_percentage is not None:
+            return LabelFilter(label_percentage=self.label_percentage)
+        if self.filter_rate is None:
+            return non_filter
+        int_field = self.dataset.data.train_id_field
+        int_value = int(self.dataset.data.size * self.filter_rate)
+        return NewIntFilter(filter_rate=self.filter_rate, int_field=int_field, int_value=int_value)
+
+
+class CloudColdLatencyCase(Case):
+    case_id: CaseType = CaseType.CloudColdLatencyCase
+    label: CaseLabel = CaseLabel.CloudColdLatency
+    dataset_with_size_type: DatasetWithSizeType | None = None
+    payload_profile: PayloadProfile = PayloadProfile.IDS_ONLY
+    filter_rate: float | None = None
+    label_percentage: float | None = None
+    query_count: int = 1000
+
+    def __init__(
+        self,
+        dataset_with_size_type: DatasetWithSizeType | str | None = None,
+        payload_profile: PayloadProfile | str = PayloadProfile.IDS_ONLY,
+        filter_rate: float | None = None,
+        label_percentage: float | None = None,
+        query_count: int = 1000,
+        **kwargs,
+    ):
+        if filter_rate is not None and label_percentage is not None:
+            msg = "CloudColdLatencyCase supports only one filter type per run"
+            raise ValueError(msg)
+        if query_count <= 0:
+            msg = "query_count must be positive"
+            raise ValueError(msg)
+        if dataset_with_size_type is not None and not isinstance(dataset_with_size_type, DatasetWithSizeType):
+            dataset_with_size_type = DatasetWithSizeType(dataset_with_size_type)
+        if not isinstance(payload_profile, PayloadProfile):
+            payload_profile = PayloadProfile(payload_profile)
+
+        if dataset_with_size_type is None:
+            dataset = Dataset.LAION.manager(100_000_000)
+            load_timeout = config.LOAD_TIMEOUT_768D_100M
+            optimize_timeout = config.OPTIMIZE_TIMEOUT_768D_100M
+            dataset_name = "LAION 100M (768dim)"
+        else:
+            dataset = dataset_with_size_type.get_manager()
+            load_timeout = dataset_with_size_type.get_load_timeout()
+            optimize_timeout = dataset_with_size_type.get_optimize_timeout()
+            dataset_name = dataset_with_size_type.value
+
+        name = f"Cloud Cold Latency - {payload_profile.value} - {dataset_name}"
+        description = (
+            "Cloud leaderboard cold/warm serial latency case with explicit response payload profile. "
+            f"Payload profile: {payload_profile.value}; dataset: {dataset_name}; query count: {query_count}."
+        )
+        super().__init__(
+            name=name,
+            description=description,
+            dataset=dataset,
+            load_timeout=load_timeout,
+            optimize_timeout=optimize_timeout,
+            dataset_with_size_type=dataset_with_size_type,
+            payload_profile=payload_profile,
+            filter_rate=filter_rate,
+            label_percentage=label_percentage,
+            query_count=query_count,
+            **kwargs,
+        )
+
+    @property
+    def filters(self) -> Filter:
+        if self.label_percentage is not None:
+            return LabelFilter(label_percentage=self.label_percentage)
+        if self.filter_rate is None:
+            return non_filter
+        int_field = self.dataset.data.train_id_field
+        int_value = int(self.dataset.data.size * self.filter_rate)
+        return NewIntFilter(filter_rate=self.filter_rate, int_field=int_field, int_value=int_value)
+
+
+class CloudInsertCase(Case):
+    case_id: CaseType = CaseType.CloudInsertCase
+    label: CaseLabel = CaseLabel.CloudInsert
+    batch_size: int
+    duration: float | None = None
+    readiness_timeout: float | None = config.CLOUD_INSERT_READINESS_TIMEOUT
+    readiness_poll_interval: float = config.CLOUD_INSERT_READINESS_POLL_INTERVAL
+    dataset_with_size_type: DatasetWithSizeType | None = None
+
+    def __init__(
+        self,
+        batch_size: int,
+        duration: float | None = None,
+        readiness_timeout: float | None = config.CLOUD_INSERT_READINESS_TIMEOUT,
+        readiness_poll_interval: float = config.CLOUD_INSERT_READINESS_POLL_INTERVAL,
+        dataset_with_size_type: DatasetWithSizeType | str | None = None,
+        **kwargs,
+    ):
+        if dataset_with_size_type is not None and not isinstance(dataset_with_size_type, DatasetWithSizeType):
+            dataset_with_size_type = DatasetWithSizeType(dataset_with_size_type)
+        dataset = (
+            Dataset.LAION.manager(100_000_000)
+            if dataset_with_size_type is None
+            else dataset_with_size_type.get_manager()
+        )
+        super().__init__(
+            name=f"Cloud Insert - batch {batch_size}",
+            description="Cloud leaderboard insert-only case with readiness polling.",
+            dataset=dataset,
+            batch_size=batch_size,
+            duration=duration,
+            readiness_timeout=readiness_timeout,
+            readiness_poll_interval=readiness_poll_interval,
+            dataset_with_size_type=dataset_with_size_type,
+            **kwargs,
+        )
+
+
+class CloudMultiTenantSearchCase(PerformanceCase):
+    case_id: CaseType = CaseType.CloudMultiTenantSearchCase
+    dataset_with_size_type: DatasetWithSizeType = DatasetWithSizeType.CohereLarge
+    tenant_count: int = 1000
+    tenant_prefix: str = "tenant_"
+    tenant_id_width: int = 4
+    tenant_distribution: str = "uniform_by_id_mod"
+    measure_recall: bool = False
+    payload_profile: PayloadProfile = PayloadProfile.IDS_ONLY
+    filter_rate: float | None = None
+    label_percentage: float | None = None
+
+    def __init__(
+        self,
+        dataset_with_size_type: DatasetWithSizeType | str = DatasetWithSizeType.CohereLarge,
+        tenant_count: int = 1000,
+        tenant_prefix: str = "tenant_",
+        tenant_id_width: int = 4,
+        payload_profile: PayloadProfile | str = PayloadProfile.IDS_ONLY,
+        filter_rate: float | None = None,
+        label_percentage: float | None = None,
+        **kwargs,
+    ):
+        if filter_rate is not None and label_percentage is not None:
+            msg = "CloudMultiTenantSearchCase supports only one filter type per run"
+            raise ValueError(msg)
+        if not isinstance(dataset_with_size_type, DatasetWithSizeType):
+            dataset_with_size_type = DatasetWithSizeType(dataset_with_size_type)
+        if not isinstance(payload_profile, PayloadProfile):
+            payload_profile = PayloadProfile(payload_profile)
+        if tenant_count <= 0:
+            msg = "tenant_count must be greater than 0"
+            raise ValueError(msg)
+        if tenant_id_width <= 0:
+            msg = "tenant_id_width must be greater than 0"
+            raise ValueError(msg)
+
+        dataset = dataset_with_size_type.get_manager()
+        super().__init__(
+            name=f"Cloud Multi-Tenant Search - {dataset_with_size_type.value}, {tenant_count} tenants",
+            description=(
+                "Multi-tenant QPS/latency benchmark with deterministic tenant routing "
+                f"({dataset_with_size_type.value}, {tenant_count} tenants)."
+            ),
+            dataset=dataset,
+            load_timeout=dataset_with_size_type.get_load_timeout(),
+            optimize_timeout=dataset_with_size_type.get_optimize_timeout(),
+            dataset_with_size_type=dataset_with_size_type,
+            tenant_count=tenant_count,
+            tenant_prefix=tenant_prefix,
+            tenant_id_width=tenant_id_width,
+            payload_profile=payload_profile,
+            filter_rate=filter_rate,
+            label_percentage=label_percentage,
+            **kwargs,
+        )
+
+    @property
+    def is_multitenant(self) -> bool:
+        return True
+
+    def tenant_for_id(self, row_id: int) -> str:
+        tenant_id = int(row_id) % self.tenant_count
+        return f"{self.tenant_prefix}{tenant_id:0{self.tenant_id_width}d}"
+
+    def tenant_labels_for_ids(self, row_ids: list[int]) -> list[str]:
+        return [self.tenant_for_id(row_id) for row_id in row_ids]
+
+    def tenant_labels(self) -> list[str]:
+        return [f"{self.tenant_prefix}{tenant_id:0{self.tenant_id_width}d}" for tenant_id in range(self.tenant_count)]
+
+    @property
+    def filters(self) -> Filter:
+        if self.label_percentage is not None:
+            return LabelFilter(label_percentage=self.label_percentage)
+        if self.filter_rate is None:
+            return non_filter
+        int_field = self.dataset.data.train_id_field
+        int_value = int(self.dataset.data.size * self.filter_rate)
+        return NewIntFilter(filter_rate=self.filter_rate, int_field=int_field, int_value=int_value)
+
+
+class LabelFilterPerformanceCase(PerformanceCase):
+    case_id: CaseType = CaseType.LabelFilterPerformanceCase
+    dataset_with_size_type: DatasetWithSizeType
+    label_percentage: float
+
+    def __init__(
+        self,
+        dataset_with_size_type: DatasetWithSizeType | str,
+        label_percentage: float,
+        **kwargs,
+    ):
+        if not isinstance(dataset_with_size_type, DatasetWithSizeType):
+            dataset_with_size_type = DatasetWithSizeType(dataset_with_size_type)
+        name = f"Label-Filter-{label_percentage*100:.1f}% - {dataset_with_size_type.value}"
+        description = f"Label-Filter-{label_percentage*100:.1f}% Performance Test ({dataset_with_size_type.value})"
+        dataset = dataset_with_size_type.get_manager()
+        load_timeout = dataset_with_size_type.get_load_timeout()
+        optimize_timeout = dataset_with_size_type.get_optimize_timeout()
+        filters = LabelFilter(label_percentage=label_percentage)
+        filter_rate = filters.filter_rate
+        super().__init__(
+            name=name,
+            description=description,
+            dataset=dataset,
+            load_timeout=load_timeout,
+            optimize_timeout=optimize_timeout,
+            filter_rate=filter_rate,
+            dataset_with_size_type=dataset_with_size_type,
+            label_percentage=label_percentage,
+            **kwargs,
+        )
+
+    @property
+    def filters(self) -> Filter:
+        return LabelFilter(label_percentage=self.label_percentage)
 
 
 type2case = {
@@ -365,6 +932,17 @@ type2case = {
     CaseType.Performance1536D5M1P: Performance1536D5M1P,
     CaseType.Performance1536D500K99P: Performance1536D500K99P,
     CaseType.Performance1536D5M99P: Performance1536D5M99P,
+    CaseType.Performance1024D1M: Performance1024D1M,
+    CaseType.Performance1024D10M: Performance1024D10M,
     CaseType.Performance1536D50K: Performance1536D50K,
+    CaseType.Performance96D1B: Performance96D1B,
     CaseType.PerformanceCustomDataset: PerformanceCustomDataset,
+    CaseType.StreamingPerformanceCase: StreamingPerformanceCase,
+    CaseType.StreamingCustomDataset: StreamingCustomDataset,
+    CaseType.NewIntFilterPerformanceCase: NewIntFilterPerformanceCase,
+    CaseType.LabelFilterPerformanceCase: LabelFilterPerformanceCase,
+    CaseType.CloudPayloadSearchCase: CloudPayloadSearchCase,
+    CaseType.CloudInsertCase: CloudInsertCase,
+    CaseType.CloudColdLatencyCase: CloudColdLatencyCase,
+    CaseType.CloudMultiTenantSearchCase: CloudMultiTenantSearchCase,
 }
