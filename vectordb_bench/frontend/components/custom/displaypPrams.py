@@ -25,3 +25,14 @@ the number of copied query vectors also increases significantly,
 which can place substantial pressure on memory resources.
 """,
     )
+    st.caption(
+        """We recommend limiting the number of test query vectors, like 1,000.""",
+        help="""
+When conducting concurrent query tests, Vdbbench creates a large number of processes. 
+To minimize additional communication overhead during testing, 
+we prepare a complete set of test queries for each process, allowing them to run independently.\n
+However, this means that as the number of concurrent processes increases, 
+the number of copied query vectors also increases significantly, 
+which can place substantial pressure on memory resources.
+""",
+    )

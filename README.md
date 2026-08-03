@@ -15,6 +15,8 @@ Prepare to delve into the world of VDBBench, and let it guide you in uncovering 
 
 VDBBench is sponsored by Zilliz，the leading opensource vectorDB company behind Milvus. Choose smarter with VDBBench - start your free test on [zilliz cloud](https://zilliz.com/) today!
 
+VectorDBBench is sponsered by Zilliz，the leading opensource vectorDB company behind Milvus. Choose smarter with VectorDBBench- start your free test on [zilliz cloud](https://zilliz.com/) today!
+
 **Leaderboard:** https://zilliz.com/benchmark
 ## Quick Start
 ### Prerequirement

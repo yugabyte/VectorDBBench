@@ -498,6 +498,8 @@ class PgVector(VectorDB):
 
         index_param = self.case_config.index_param()
 
+        index_param = self.case_config.index_param()
+
         try:
             metadata_arr = np.array(metadata)
             embeddings_arr = np.array(embeddings)
