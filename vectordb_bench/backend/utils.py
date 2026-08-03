@@ -1,5 +1,49 @@
+import contextlib
+import logging
+import signal
 import time
 from functools import wraps
+import requests
+from tqdm import tqdm
+import os
+
+import psutil
+
+log = logging.getLogger(__name__)
+
+
+def kill_proc_tree(pids: list[int] | None = None, grace: float = 2, timeout: float = 3):
+    """Kill child processes with SIGTERM, then SIGKILL for survivors.
+
+    Args:
+        pids: Specific PIDs to kill. If None, kills all children of the
+              current process (recursive).
+        grace: Seconds to wait after SIGTERM before sending SIGKILL.
+        timeout: Seconds to wait for processes to fully exit after SIGKILL.
+    """
+    if pids is not None:
+        targets = []
+        for pid in pids:
+            with contextlib.suppress(psutil.NoSuchProcess):
+                targets.append(psutil.Process(pid))
+    else:
+        targets = psutil.Process().children(recursive=True)
+
+    for p in targets:
+        try:
+            log.warning(f"sending SIGTERM to child process: {p}")
+            p.send_signal(signal.SIGTERM)
+        except psutil.NoSuchProcess:
+            pass
+
+    _, alive = psutil.wait_procs(targets, timeout=grace)
+    for p in alive:
+        try:
+            log.warning(f"force killing child process: {p}")
+            p.kill()
+        except psutil.NoSuchProcess:
+            pass
+    psutil.wait_procs(alive, timeout=timeout)
 
 
 def numerize(n: int) -> str:
@@ -80,3 +124,24 @@ def compose_gt_file(filters: float | str | None = None) -> str:
 
     msg = f"Filters not supported: {filters}"
     raise ValueError(msg)
+
+
+def download_file(url: str, dest_path: str, chunk_size: int = 8192, show_progress: bool = True) -> None:
+    """Download a file from a URL to a local path, with progress bar. Skips if file exists."""
+    if os.path.exists(dest_path):
+        return
+    response = requests.get(url, stream=True)
+    response.raise_for_status()
+    total = int(response.headers.get('content-length', 0))
+    with open(dest_path, 'wb') as file, tqdm(
+        desc=f"Downloading {os.path.basename(dest_path)}",
+        total=total,
+        unit='B',
+        unit_scale=True,
+        unit_divisor=1024,
+        disable=not show_progress
+    ) as bar:
+        for chunk in response.iter_content(chunk_size=chunk_size):
+            if chunk:
+                file.write(chunk)
+                bar.update(len(chunk))

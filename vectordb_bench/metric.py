@@ -13,21 +13,55 @@ class Metric:
     # for load cases
     max_load_count: int = 0
 
+    # for both performace and streaming cases
+    insert_duration: float = 0.0
+    optimize_duration: float = 0.0
+    load_duration: float = 0.0  # insert + optimize
+
     # for performance cases
-    load_duration: float = 0.0  # duration to load all dataset into DB
     qps: float = 0.0
     serial_latency_p99: float = 0.0
+    serial_latency_p95: float = 0.0
     recall: float = 0.0
     ndcg: float = 0.0
     conc_num_list: list[int] = field(default_factory=list)
     conc_qps_list: list[float] = field(default_factory=list)
     conc_latency_p99_list: list[float] = field(default_factory=list)
+    conc_latency_p95_list: list[float] = field(default_factory=list)
     conc_latency_avg_list: list[float] = field(default_factory=list)
+    payload_profile: str = "ids_only"
+    payload_estimated_bytes_per_query: int = 0
+
+    inserted_count: int = 0
+    insert_rows_per_second: float = 0.0
+    insert_completion_seconds: float = 0.0
+    searchable_after_insert_seconds: float = 0.0
+    indexed_after_searchable_seconds: float = 0.0
+    additional_parameters: dict = field(default_factory=dict)
+
+    # for streaming cases
+    st_ideal_insert_duration: int = 0
+    st_search_stage_list: list[int] = field(default_factory=list)
+    st_search_time_list: list[float] = field(default_factory=list)
+    st_max_qps_list_list: list[float] = field(default_factory=list)
+    st_recall_list: list[float] = field(default_factory=list)
+    st_ndcg_list: list[float] = field(default_factory=list)
+    st_serial_latency_p99_list: list[float] = field(default_factory=list)
+    st_serial_latency_p95_list: list[float] = field(default_factory=list)
+    st_conc_failed_rate_list: list[float] = field(default_factory=list)
+
+    # for streaming cases - concurrent latency data per stage
+    st_conc_num_list_list: list[list[int]] = field(default_factory=list)
+    st_conc_qps_list_list: list[list[float]] = field(default_factory=list)
+    st_conc_latency_p99_list_list: list[list[float]] = field(default_factory=list)
+    st_conc_latency_p95_list_list: list[list[float]] = field(default_factory=list)
+    st_conc_latency_avg_list_list: list[list[float]] = field(default_factory=list)
 
 
 QURIES_PER_DOLLAR_METRIC = "QP$ (Quries per Dollar)"
 LOAD_DURATION_METRIC = "load_duration"
 SERIAL_LATENCY_P99_METRIC = "serial_latency_p99"
+SERIAL_LATENCY_P95_METRIC = "serial_latency_p95"
 MAX_LOAD_COUNT_METRIC = "max_load_count"
 QPS_METRIC = "qps"
 RECALL_METRIC = "recall"
@@ -35,6 +69,7 @@ RECALL_METRIC = "recall"
 metric_unit_map = {
     LOAD_DURATION_METRIC: "s",
     SERIAL_LATENCY_P99_METRIC: "ms",
+    SERIAL_LATENCY_P95_METRIC: "ms",
     MAX_LOAD_COUNT_METRIC: "K",
     QURIES_PER_DOLLAR_METRIC: "K",
 }
@@ -42,6 +77,7 @@ metric_unit_map = {
 lower_is_better_metrics = [
     LOAD_DURATION_METRIC,
     SERIAL_LATENCY_P99_METRIC,
+    SERIAL_LATENCY_P95_METRIC,
 ]
 
 metric_order = [
@@ -49,6 +85,7 @@ metric_order = [
     RECALL_METRIC,
     LOAD_DURATION_METRIC,
     SERIAL_LATENCY_P99_METRIC,
+    SERIAL_LATENCY_P95_METRIC,
     MAX_LOAD_COUNT_METRIC,
 ]
 
