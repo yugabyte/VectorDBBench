@@ -6,6 +6,7 @@ from pydantic import SecretStr
 
 from vectordb_bench.backend.clients import DB
 from vectordb_bench.backend.clients.api import MetricType
+from vectordb_bench import config
 
 from ....cli.cli import (
     CommonTypedDict,
@@ -55,6 +56,50 @@ class PgVectorTypedDict(CommonTypedDict):
         ),
     ]
     db_name: Annotated[str, click.option("--db-name", type=str, help="Db name", required=True)]
+    load_balance: Annotated[
+        bool,
+        click.option(
+            "--load-balance/--skip-load-balance",
+            type=bool,
+            default=False,
+            show_default=True,
+            help="Enable YugabyteDB smart-driver connection load balancing "
+            "(load_balance_hosts=true): the driver discovers nodes via yb_servers() and "
+            "distributes connections across the cluster. Requires the psycopg-yugabytedb driver. "
+            "Leave off for plain PostgreSQL; pass --load-balance when targeting YugabyteDB.",
+        ),
+    ]
+    topology_keys: Annotated[
+        str | None,
+        click.option(
+            "--topology-keys",
+            type=str,
+            default=None,
+            required=False,
+            help="Optional YB smart-driver topology hint (cloud.region.zone, comma-separated). "
+            "Restricts load balancing to matching nodes; omit to balance across all nodes.",
+        ),
+    ]
+    create_index_before_load: Annotated[
+        bool,
+        click.option(
+            "--create-index-before-load/--skip-create-index-before-load",
+            type=bool,
+            default=False,
+            show_default=True,
+            help="Create the index before loading data (empty index, then insert)",
+        ),
+    ]
+    create_index_after_load: Annotated[
+        bool,
+        click.option(
+            "--create-index-after-load/--skip-create-index-after-load",
+            type=bool,
+            default=True,
+            show_default=True,
+            help="Create the index after loading data (insert, then build index)",
+        ),
+    ]
     maintenance_work_mem: Annotated[
         str | None,
         click.option(
@@ -149,11 +194,17 @@ def PgVectorIVFFlat(
             host=parameters["host"],
             port=parameters["port"],
             db_name=parameters["db_name"],
+            load_balance=parameters["load_balance"],
+            topology_keys=parameters["topology_keys"],
         ),
         db_case_config=PgVectorIVFFlatConfig(
             metric_type=None,
+            create_index_before_load=parameters["create_index_before_load"],
+            create_index_after_load=parameters["create_index_after_load"],
             lists=parameters["lists"],
             probes=parameters["probes"],
+            maintenance_work_mem=parameters["maintenance_work_mem"],
+            max_parallel_workers=parameters["max_parallel_workers"],
             quantization_type=parameters["quantization_type"],
             table_quantization_type=parameters["table_quantization_type"],
             reranking=parameters["reranking"],
@@ -184,8 +235,12 @@ def PgVectorHNSW(
             host=parameters["host"],
             port=parameters["port"],
             db_name=parameters["db_name"],
+            load_balance=parameters["load_balance"],
+            topology_keys=parameters["topology_keys"],
         ),
         db_case_config=PgVectorHNSWConfig(
+            create_index_before_load=parameters["create_index_before_load"],
+            create_index_after_load=parameters["create_index_after_load"],
             m=parameters["m"],
             ef_construction=parameters["ef_construction"],
             ef_search=parameters["ef_search"],

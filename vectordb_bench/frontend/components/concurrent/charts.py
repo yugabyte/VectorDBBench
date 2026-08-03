@@ -20,6 +20,11 @@ def drawChartsByCase(allData, showCaseNames: list[str], st, latency_type: str):
                     if 0 <= i < len(caseData["conc_latency_p99_list"])
                     else 0
                 ),
+                "latency_p95": (
+                    caseData["conc_latency_p95_list"][i] * 1000
+                    if "conc_latency_p95_list" in caseData and 0 <= i < len(caseData["conc_latency_p95_list"])
+                    else 0
+                ),
                 "latency_avg": (
                     caseData["conc_latency_avg_list"][i] * 1000
                     if 0 <= i < len(caseData["conc_latency_avg_list"])
@@ -89,4 +94,4 @@ def drawChart(data, st, key: str, x_metric: str = "latency_p99", y_metric: str =
     fig.update_yaxes(range=yrange, title_text=gen_title(y_metric))
     fig.update_traces(textposition="bottom right", texttemplate="conc-%{text:,.4~r}")
 
-    st.plotly_chart(fig, use_container_width=True, key=key)
+    st.plotly_chart(fig, width="stretch", key=key)

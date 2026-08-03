@@ -1,9 +1,23 @@
+from typing import ClassVar, TypedDict
+
 from pydantic import BaseModel, SecretStr
 
 from ..api import DBCaseConfig, DBConfig, MetricType
 
 
+class TiDBConfigDict(TypedDict):
+    host: str
+    port: int
+    user: str
+    password: str
+    database: str
+    ssl_verify_cert: bool
+    ssl_verify_identity: bool
+
+
 class TiDBConfig(DBConfig):
+    _extra_empty_skip: ClassVar[frozenset[str]] = frozenset({"password"})
+
     user_name: str = "root"
     password: SecretStr
     host: str = "127.0.0.1"
@@ -11,7 +25,7 @@ class TiDBConfig(DBConfig):
     db_name: str = "test"
     ssl: bool = False
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> TiDBConfigDict:
         pwd_str = self.password.get_secret_value()
         return {
             "host": self.host,

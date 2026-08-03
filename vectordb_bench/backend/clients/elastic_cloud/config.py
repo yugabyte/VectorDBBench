@@ -1,34 +1,88 @@
-from enum import Enum
+from enum import StrEnum
+from typing import ClassVar
 
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, SecretStr, model_validator
 
 from ..api import DBCaseConfig, DBConfig, IndexType, MetricType
 
 
 class ElasticCloudConfig(DBConfig, BaseModel):
-    cloud_id: SecretStr
+    _extra_empty_skip: ClassVar[frozenset[str]] = frozenset({"cloud_id", "host"})
+
+    # Elastic Cloud connection. Takes precedence when set.
+    cloud_id: SecretStr | None = None
+    # Self-hosted / host-based connection (used when cloud_id is not provided).
+    scheme: str = "https"
+    host: str = ""
+    port: int = 9200
+    user: str = "elastic"
     password: SecretStr
 
+    @model_validator(mode="after")
+    def _check_connection_target(self) -> "ElasticCloudConfig":
+        has_cloud_id = bool(self.cloud_id and self.cloud_id.get_secret_value())
+        if not has_cloud_id and not self.host:
+            msg = "ElasticCloudConfig requires either cloud_id or host to be set."
+            raise ValueError(msg)
+        return self
+
     def to_dict(self) -> dict:
+        auth = (self.user, self.password.get_secret_value())
+        if self.cloud_id and self.cloud_id.get_secret_value():
+            return {
+                "cloud_id": self.cloud_id.get_secret_value(),
+                "basic_auth": auth,
+            }
         return {
-            "cloud_id": self.cloud_id.get_secret_value(),
-            "basic_auth": ("elastic", self.password.get_secret_value()),
+            "hosts": [{"scheme": self.scheme, "host": self.host, "port": self.port}],
+            "basic_auth": auth,
         }
 
 
-class ESElementType(str, Enum):
+class ESElementType(StrEnum):
     float = "float"  # 4 byte
     byte = "byte"  # 1 byte, -128 to 127
 
 
 class ElasticCloudIndexConfig(BaseModel, DBCaseConfig):
     element_type: ESElementType = ESElementType.float
-    index: IndexType = IndexType.ES_HNSW  # ES only support 'hnsw'
+    index: IndexType = IndexType.ES_HNSW
+    number_of_shards: int = 1
+    number_of_replicas: int = 0
+    refresh_interval: str = "30s"
+    merge_max_thread_count: int = 8
+    use_rescore: bool = False
+    oversample_ratio: float = 2.0
+    use_routing: bool = False
+    use_force_merge: bool = True
 
     metric_type: MetricType | None = None
     efConstruction: int | None = None
     M: int | None = None
     num_candidates: int | None = None
+
+    def __eq__(self, obj: any):
+        return (
+            self.index == obj.index
+            and self.number_of_shards == obj.number_of_shards
+            and self.number_of_replicas == obj.number_of_replicas
+            and self.use_routing == obj.use_routing
+            and self.efConstruction == obj.efConstruction
+            and self.M == obj.M
+        )
+
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self.index,
+                self.number_of_shards,
+                self.number_of_replicas,
+                self.use_routing,
+                self.efConstruction,
+                self.M,
+                2,
+            )
+        )
 
     def parse_metric(self) -> str:
         if self.metric_type == MetricType.L2:

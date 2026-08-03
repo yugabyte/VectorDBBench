@@ -10,5 +10,12 @@ build/
 venv/
 .venv/
 .idea/
-results/
 logs/
+vectordb_bench/results/cloudleaderboard/
+
+# Worktrees
+.worktrees/
+
+# AI rules
+CLAUDE.md
+AGENTS.md
