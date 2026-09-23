@@ -8,15 +8,27 @@ from ..api import DBCaseConfig, DBConfig, IndexType, MetricType
 
 POSTGRE_URL_PLACEHOLDER = "postgresql://%s:%s@%s/%s"
 
+# How connections are spread over the YugabyteDB cluster when load balancing is on.
+#   smart_driver: hand the job to the YugabyteDB smart driver (load_balance_hosts=true);
+#                 it discovers nodes via yb_servers() and picks the target itself.
+#   round_robin:  VectorDBBench picks the target host itself, assigning connections to
+#                 nodes strictly round-robin so N connections land as evenly as possible
+#                 on M nodes (e.g. 8 connections / 3 nodes -> 3, 3, 2).
+LB_STRATEGY_SMART_DRIVER = "smart_driver"
+LB_STRATEGY_ROUND_ROBIN = "round_robin"
+LB_STRATEGIES = (LB_STRATEGY_SMART_DRIVER, LB_STRATEGY_ROUND_ROBIN)
+
 
 class PgVectorConfigDict(TypedDict):
     """These keys will be directly used as kwargs in psycopg connection string,
     so the names must match exactly psycopg API.
 
-    Exception: `load_balance` is a VectorDBBench-only toggle (popped before reaching
-    psycopg.connect); when set it adds the YugabyteDB smart-driver param
-    `load_balance_hosts=true`. `topology_keys` is a real YB smart-driver param.
-    See PgVector._create_connection."""
+    Exception: `load_balance` and `load_balance_strategy` are VectorDBBench-only
+    toggles (popped before reaching psycopg.connect). With the smart_driver strategy
+    `load_balance` adds the YugabyteDB smart-driver param `load_balance_hosts=true`;
+    with round_robin it makes VectorDBBench rewrite `host` per connection.
+    `topology_keys` is a real YB smart-driver param, and also narrows the node list
+    used by round_robin. See PgVector._create_connection."""
 
     user: str
     password: str
@@ -24,6 +36,7 @@ class PgVectorConfigDict(TypedDict):
     port: int
     dbname: str
     load_balance: bool
+    load_balance_strategy: str
     topology_keys: str | None
 
 
@@ -34,15 +47,17 @@ class PgVectorConfig(DBConfig):
     port: int = 5432
     db_name: str = "vectordb"
     table_name: str = "vdbbench_table_test"
-    # Smart-driver branch: when True, enable YugabyteDB cluster-aware connection load
-    # balancing (load_balance_hosts=true). The driver discovers nodes via yb_servers()
-    # and spreads connections across the cluster, so per-process search workers don't
-    # all land on the configured host. Defaults to False so plain PostgreSQL works out
-    # of the box (yb_servers() does not exist there); the YugabyteDB runner should set
-    # this True explicitly in its config.
-    load_balance: bool = False
-    # Optional YB smart-driver topology hint, e.g. "cloud.region.zone" (comma-separated
-    # for multiple). None = balance across all nodes.
+    # Spread connections across the YugabyteDB cluster instead of piling every
+    # per-process search worker onto the single configured host. On by default, and
+    # therefore always on for YugabyteDB; it is auto-disabled when the server turns
+    # out to be vanilla PostgreSQL (no yb_servers(), no smart driver), so plain
+    # PostgreSQL runs keep working untouched. See PgVector._create_connection.
+    load_balance: bool = True
+    # Which mechanism does the spreading -- see LB_STRATEGIES above.
+    load_balance_strategy: str = LB_STRATEGY_SMART_DRIVER
+    # Optional YB topology hint, e.g. "cloud.region.zone" (comma-separated for
+    # multiple). Passed to the smart driver as-is; with the round_robin strategy it
+    # filters the yb_servers() node list. None = balance across all nodes.
     topology_keys: str | None = None
 
     def to_dict(self) -> PgVectorConfigDict:
@@ -56,6 +71,7 @@ class PgVectorConfig(DBConfig):
                 "user": user_str,
                 "password": pwd_str,
                 "load_balance": self.load_balance,
+                "load_balance_strategy": self.load_balance_strategy,
                 "topology_keys": self.topology_keys,
             },
             "table_name": self.table_name,
