@@ -4,9 +4,9 @@ from typing import Annotated, Unpack
 import click
 from pydantic import SecretStr
 
+from vectordb_bench import config
 from vectordb_bench.backend.clients import DB
 from vectordb_bench.backend.clients.api import MetricType
-from vectordb_bench import config
 
 from ....cli.cli import (
     CommonTypedDict,
@@ -17,6 +17,7 @@ from ....cli.cli import (
     get_custom_case_config,
     run,
 )
+from .config import LB_STRATEGIES, LB_STRATEGY_SMART_DRIVER
 
 
 def set_default_quantized_fetch_limit(ctx: any, param: any, value: any):  # noqa: ARG001
@@ -61,12 +62,32 @@ class PgVectorTypedDict(CommonTypedDict):
         click.option(
             "--load-balance/--skip-load-balance",
             type=bool,
-            default=False,
+            default=True,
             show_default=True,
-            help="Enable YugabyteDB smart-driver connection load balancing "
-            "(load_balance_hosts=true): the driver discovers nodes via yb_servers() and "
-            "distributes connections across the cluster. Requires the psycopg-yugabytedb driver. "
-            "Leave off for plain PostgreSQL; pass --load-balance when targeting YugabyteDB.",
+            help="Distribute connections across the YugabyteDB cluster instead of sending every "
+            "concurrent-search worker to the configured host. On by default, so it is always on "
+            "for YugabyteDB; it is auto-disabled when the server is detected to be vanilla "
+            "PostgreSQL. Pass --skip-load-balance to pin every connection to --host. "
+            "See --lb-strategy for how the connections are placed.",
+        ),
+    ]
+    load_balance_strategy: Annotated[
+        str,
+        click.option(
+            # perfservice keys config_file.yaml by the click parameter name, and its
+            # payload already spells the sibling flag out as `load_balance`, so the
+            # long name is what the pipeline writes; --lb-strategy is a typing alias.
+            "--load-balance-strategy",
+            "--lb-strategy",
+            type=click.Choice(list(LB_STRATEGIES)),
+            default=LB_STRATEGY_SMART_DRIVER,
+            show_default=True,
+            help="How --load-balance places connections. 'smart_driver': the YugabyteDB smart "
+            "driver discovers nodes via yb_servers() and places them (requires the "
+            "psycopg-yugabytedb driver). 'round_robin': VectorDBBench assigns connections to "
+            "nodes itself in strict round-robin order, so they split as evenly as the counts "
+            "allow (8 connections over 3 nodes -> 3/3/2). round_robin takes its node list from "
+            "a comma-separated --host, else from yb_servers().",
         ),
     ]
     topology_keys: Annotated[
@@ -76,8 +97,9 @@ class PgVectorTypedDict(CommonTypedDict):
             type=str,
             default=None,
             required=False,
-            help="Optional YB smart-driver topology hint (cloud.region.zone, comma-separated). "
-            "Restricts load balancing to matching nodes; omit to balance across all nodes.",
+            help="Optional YB topology hint (cloud.region.zone, comma-separated; '*' wildcard "
+            "allowed). Restricts load balancing to matching nodes under either --lb-strategy; "
+            "omit to balance across all nodes.",
         ),
     ]
     create_index_before_load: Annotated[
@@ -195,6 +217,7 @@ def PgVectorIVFFlat(
             port=parameters["port"],
             db_name=parameters["db_name"],
             load_balance=parameters["load_balance"],
+            load_balance_strategy=parameters["load_balance_strategy"],
             topology_keys=parameters["topology_keys"],
         ),
         db_case_config=PgVectorIVFFlatConfig(
@@ -236,6 +259,7 @@ def PgVectorHNSW(
             port=parameters["port"],
             db_name=parameters["db_name"],
             load_balance=parameters["load_balance"],
+            load_balance_strategy=parameters["load_balance_strategy"],
             topology_keys=parameters["topology_keys"],
         ),
         db_case_config=PgVectorHNSWConfig(

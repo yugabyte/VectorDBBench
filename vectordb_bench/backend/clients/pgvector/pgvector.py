@@ -1,8 +1,12 @@
 """Wrapper around the Pgvector vector database over VectorDB"""
 
+import hashlib
 import logging
+import os
+import tempfile
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -13,7 +17,17 @@ from psycopg import Connection, Cursor, sql
 from vectordb_bench.backend.filter import Filter, FilterOp
 
 from ..api import VectorDB
-from .config import PgVectorConfigDict, PgVectorIndexConfig
+from .config import (
+    LB_STRATEGY_ROUND_ROBIN,
+    LB_STRATEGY_SMART_DRIVER,
+    PgVectorConfigDict,
+    PgVectorIndexConfig,
+)
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX
+    fcntl = None
 
 log = logging.getLogger(__name__)
 
@@ -54,13 +68,26 @@ class PgVector(VectorDB):
         self._vector_field = "embedding"
         self._scalar_label_field = "label"
 
-        # Detected lazily on first use: True for YugabyteDB, False for vanilla
-        # PostgreSQL. Some statements (e.g. ALTER TABLE ... SET STORAGE) are only
-        # valid on PostgreSQL. See _server_is_yugabytedb.
+        # True for YugabyteDB, False for vanilla PostgreSQL; probed right after the
+        # bootstrap connection below and then carried into the worker processes with
+        # the pickled instance. Gates both connection load balancing and statements
+        # that are PostgreSQL-only (e.g. ALTER TABLE ... SET STORAGE).
         self._is_yugabytedb: bool | None = None
 
-        # construct basic units
+        # Node list used by the round_robin strategy, resolved once here (in the
+        # parent) and pickled to the search workers. Empty for every other setup.
+        self._lb_hosts: list[str] = []
+        self._rr_counter_path = self._round_robin_counter_path()
+
+        # construct basic units. This bootstrap connection is opened before we know
+        # which server we are talking to, so _create_connection applies no load
+        # balancing to it (self._is_yugabytedb is still None) -- a single connection
+        # in the parent process, which no distribution scheme cares about anyway.
         self.conn, self.cursor = self._create_connection(**self.connect_config)
+        self._server_is_yugabytedb()
+        if self._load_balance_enabled() and self._lb_strategy() == LB_STRATEGY_ROUND_ROBIN:
+            self._lb_hosts = self._resolve_round_robin_hosts()
+            self._reset_round_robin_counter()
 
         # create vector extension
         self.cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
@@ -92,25 +119,50 @@ class PgVector(VectorDB):
         self.cursor = None
         self.conn = None
 
-    @staticmethod
-    def _create_connection(**kwargs) -> tuple[Connection, Cursor]:
-        # Smart-driver branch: this build installs psycopg-yugabytedb, a psycopg3
-        # fork that is YugabyteDB cluster-aware (the import name stays `psycopg`).
-        # When load_balance is on, set the smart-driver connection params so the
-        # driver discovers cluster nodes via yb_servers() and distributes new
-        # connections across them (uniform / least-connections). That way the
-        # per-process search workers don't all pile onto the single configured
-        # host. `host` is only the seed used for discovery -- a single endpoint
-        # (e.g. master-leader) is sufficient; a comma-separated list also works
-        # and just provides multiple bootstrap seeds.
-        load_balance = kwargs.pop("load_balance", False)
+    def _lb_strategy(self) -> str:
+        return self.connect_config.get("load_balance_strategy") or LB_STRATEGY_SMART_DRIVER
+
+    def _load_balance_enabled(self) -> bool:
+        """Whether to spread this connection over the cluster.
+
+        Load balancing is a YugabyteDB feature in both strategies (the smart driver
+        and yb_servers() node discovery), so it stays off for vanilla PostgreSQL and
+        for the bootstrap connection that has not yet identified the server
+        (_is_yugabytedb is None). On YugabyteDB it is on unless explicitly disabled
+        with load_balance=False.
+        """
+        return bool(self._is_yugabytedb) and self.connect_config.get("load_balance", True)
+
+    def _create_connection(self, **kwargs) -> tuple[Connection, Cursor]:
+        # This build installs psycopg-yugabytedb, a psycopg3 fork that is YugabyteDB
+        # cluster-aware (the import name stays `psycopg`). Each concurrent-search
+        # worker is its own process opening one long-lived connection, so without
+        # load balancing every worker piles onto the single configured host. Two ways
+        # to spread them, picked by load_balance_strategy:
+        #
+        #   smart_driver -- set load_balance_hosts=true and let the driver discover
+        #     cluster nodes via yb_servers() and place the connection. `host` is only
+        #     the discovery seed; a single endpoint (e.g. master-leader) is enough,
+        #     and a comma-separated list just supplies more bootstrap seeds.
+        #   round_robin -- rewrite `host` ourselves, walking self._lb_hosts in strict
+        #     round-robin order via a counter shared by all worker processes, so the
+        #     connections split as evenly as the counts allow (8 over 3 nodes -> 3/3/2).
+        kwargs = dict(kwargs)
+        kwargs.pop("load_balance", None)
+        kwargs.pop("load_balance_strategy", None)
         topology_keys = kwargs.pop("topology_keys", None)
-        if load_balance:
-            # libpq/YB smart-driver params (understood by psycopg-yugabytedb's
-            # bundled libpq). Don't clobber an explicit caller-provided value.
-            kwargs.setdefault("load_balance_hosts", "true")
-            if topology_keys:
-                kwargs.setdefault("topology_keys", topology_keys)
+
+        if self._load_balance_enabled():
+            if self._lb_strategy() == LB_STRATEGY_ROUND_ROBIN:
+                host = self._next_round_robin_host()
+                if host:
+                    kwargs["host"] = host
+            else:
+                # libpq/YB smart-driver params (understood by psycopg-yugabytedb).
+                # Don't clobber an explicit caller-provided value.
+                kwargs.setdefault("load_balance_hosts", "true")
+                if topology_keys:
+                    kwargs.setdefault("topology_keys", topology_keys)
 
         conn = psycopg.connect(**kwargs)
         register_vector(conn)
@@ -121,6 +173,117 @@ class PgVector(VectorDB):
         assert cursor is not None, "Cursor is not initialized"
 
         return conn, cursor
+
+    def _round_robin_counter_path(self) -> str:
+        """Path of the counter file backing round-robin host assignment.
+
+        Keyed by the target cluster so two benchmark runs on the same client host
+        against different clusters keep independent sequences.
+        """
+        key = "|".join(str(self.connect_config.get(k, "")) for k in ("host", "port", "dbname"))
+        digest = hashlib.sha1(key.encode()).hexdigest()[:12]  # noqa: S324 - not security related
+        return str(Path(tempfile.gettempdir()) / f"vdbbench_pgvector_rr_{digest}.counter")
+
+    def _resolve_round_robin_hosts(self) -> list[str]:
+        """The node list that round-robin assignment walks over.
+
+        An explicit comma-separated `host` wins: the caller (perfservice passes the
+        full tserver-nodes list) knows which addresses the client can actually reach,
+        which is not always what the cluster reports. With a single seed host we ask
+        the cluster itself via yb_servers(), narrowed by topology_keys when set.
+        """
+        configured = [h.strip() for h in str(self.connect_config.get("host", "")).split(",") if h.strip()]
+        if len(configured) > 1:
+            log.info(f"{self.name} round-robin over the configured host list: {configured}")
+            return configured
+
+        try:
+            assert self.cursor is not None, "Cursor is not initialized"
+            self.cursor.execute("SELECT host, cloud, region, zone FROM yb_servers()")
+            rows = self.cursor.fetchall()
+        except Exception as e:
+            self.conn.rollback()
+            log.warning(
+                f"{self.name} could not discover nodes via yb_servers() ({e}); "
+                f"round-robin falls back to the configured host {configured}",
+            )
+            return configured
+
+        hosts = [row[0] for row in rows if row[0]]
+        keys = [k.strip() for k in (self.connect_config.get("topology_keys") or "").split(",") if k.strip()]
+        if keys:
+            matched = [row[0] for row in rows if row[0] and self._matches_topology_keys(row[1:4], keys)]
+            if matched:
+                hosts = matched
+            else:
+                log.warning(
+                    f"{self.name} no yb_servers() node matched topology_keys={keys}; "
+                    f"round-robin uses all {len(hosts)} nodes",
+                )
+
+        log.info(f"{self.name} round-robin over nodes discovered via yb_servers(): {hosts}")
+        return hosts or configured
+
+    @staticmethod
+    def _matches_topology_keys(placement: Sequence[str], keys: Sequence[str]) -> bool:
+        """Match a node's (cloud, region, zone) against cloud.region.zone keys.
+
+        `*` in a key position matches anything, mirroring the wildcard the YugabyteDB
+        smart drivers accept (e.g. "aws.us-west-2.*").
+        """
+        cloud, region, zone = (p or "" for p in placement)
+        for key in keys:
+            parts = key.split(".")
+            if len(parts) != 3:
+                log.warning(f"ignoring malformed topology key {key!r}, expected cloud.region.zone")
+                continue
+            if all(want in ("*", have) for want, have in zip(parts, (cloud, region, zone), strict=True)):
+                return True
+        return False
+
+    def _next_round_robin_host(self) -> str | None:
+        hosts = self._lb_hosts
+        if not hosts:
+            return None
+        host = hosts[self._next_round_robin_index(len(hosts))]
+        log.debug(f"{self.name} round-robin assigned connection to {host}")
+        return host
+
+    def _next_round_robin_index(self, modulo: int) -> int:
+        """Next slot in the global round-robin sequence, shared across processes.
+
+        The concurrent-search workers are separate processes with no shared memory
+        (spawn start method), so the sequence lives in a small counter file guarded by
+        an exclusive lock. Handing out consecutive slots is what makes the split even
+        for counts that don't divide: 8 connections over 3 nodes go 0,1,2,0,1,2,0,1
+        -> 3/3/2.
+        """
+        if fcntl is None:  # pragma: no cover - non-POSIX
+            log.warning("fcntl unavailable, falling back to pid-based host selection")
+            return os.getpid() % modulo
+        try:
+            fd = os.open(self._rr_counter_path, os.O_RDWR | os.O_CREAT, 0o600)
+        except OSError as e:
+            log.warning(f"cannot open round-robin counter {self._rr_counter_path} ({e}), using pid-based selection")
+            return os.getpid() % modulo
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            raw = os.read(fd, 64).decode(errors="ignore").strip()
+            counter = int(raw) if raw.isdigit() else 0
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.ftruncate(fd, 0)
+            os.write(fd, str(counter + 1).encode())
+            return counter % modulo
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+    def _reset_round_robin_counter(self) -> None:
+        """Start each run's sequence at the first node, so assignment is reproducible."""
+        try:
+            Path(self._rr_counter_path).write_text("0")
+        except OSError as e:
+            log.warning(f"cannot reset round-robin counter {self._rr_counter_path}: {e}")
 
     def _server_is_yugabytedb(self) -> bool:
         """Return True if the connected server is YugabyteDB, False for vanilla PostgreSQL.
