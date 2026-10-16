@@ -184,12 +184,25 @@ class SerialSearchRunner:
             log.debug(f"test dataset size: {len(test_data)}")
             log.debug(f"ground truth size: {len(ground_truth) if ground_truth is not None else 0}")
 
-            latencies, recalls, ndcgs = [], [], []
             tenant_rng = random.Random(0)
+            tenants = [
+                self.tenant_labels[tenant_rng.randrange(len(self.tenant_labels))] if self.tenant_labels else None
+                for _ in test_data
+            ]
+            measure_recall = self.measure_recall
+            # Duck-typed DBs that don't subclass VectorDB may lack the hook.
+            supports_exact = getattr(self.db, "supports_exact_tenant_search", None)
+            if self.tenant_labels and not measure_recall and supports_exact is not None and supports_exact():
+                log.info(f"{mp.current_process().name:14} computing exact per-tenant ground truth")
+                ground_truth = [
+                    self.db.exact_tenant_search(emb, self.k, tenant)
+                    for emb, tenant in zip(test_data, tenants, strict=True)
+                ]
+                measure_recall = True
+
+            latencies, recalls, ndcgs = [], [], []
             for idx, emb in enumerate(test_data):
-                tenant = (
-                    self.tenant_labels[tenant_rng.randrange(len(self.tenant_labels))] if self.tenant_labels else None
-                )
+                tenant = tenants[idx]
                 s = time.perf_counter()
                 try:
                     results = self._get_db_search_res(emb, tenant=tenant)
@@ -199,7 +212,7 @@ class SerialSearchRunner:
 
                 latencies.append(time.perf_counter() - s)
 
-                if self.measure_recall and ground_truth is not None:
+                if measure_recall and ground_truth is not None:
                     gt = ground_truth[idx]
                     recalls.append(calc_recall(self.k, gt[: self.k], results))
                     ndcgs.append(calc_ndcg(gt[: self.k], results, ideal_dcg))
