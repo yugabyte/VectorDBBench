@@ -1,0 +1,608 @@
+{
+  "run_id": "5c1e8bd468224ffda1b39b08cdc342c3",
+  "task_label": "standard",
+  "results": [
+    {
+      "metrics": {
+        "max_load_count": 0,
+        "insert_duration": 0.0,
+        "optimize_duration": 0.0,
+        "load_duration": 8671.2705,
+        "qps": 11.2945,
+        "serial_latency_p99": 3.6112,
+        "serial_latency_p95": 0.0,
+        "recall": 0.996,
+        "ndcg": 0.0,
+        "conc_num_list": [],
+        "conc_qps_list": [],
+        "conc_latency_p99_list": [],
+        "conc_latency_p95_list": [],
+        "conc_latency_avg_list": [],
+        "payload_profile": "ids_only",
+        "payload_estimated_bytes_per_query": 0,
+        "inserted_count": 0,
+        "insert_rows_per_second": 0.0,
+        "insert_completion_seconds": 0.0,
+        "searchable_after_insert_seconds": 0.0,
+        "indexed_after_searchable_seconds": 0.0,
+        "additional_parameters": {},
+        "st_ideal_insert_duration": 0,
+        "st_search_stage_list": [],
+        "st_search_time_list": [],
+        "st_max_qps_list_list": [],
+        "st_recall_list": [],
+        "st_ndcg_list": [],
+        "st_serial_latency_p99_list": [],
+        "st_serial_latency_p95_list": [],
+        "st_conc_failed_rate_list": [],
+        "st_conc_num_list_list": [],
+        "st_conc_qps_list_list": [],
+        "st_conc_latency_p99_list_list": [],
+        "st_conc_latency_p95_list_list": [],
+        "st_conc_latency_avg_list_list": []
+      },
+      "task_config": {
+        "db": "ElasticCloud",
+        "db_config": {
+          "db_label": "upTo2.5c8g",
+          "version": "",
+          "note": "",
+          "cloud_id": "**********",
+          "scheme": "https",
+          "host": "",
+          "port": 9200,
+          "user": "elastic",
+          "password": "**********"
+        },
+        "db_case_config": {
+          "element_type": "float",
+          "index": "hnsw",
+          "number_of_shards": 1,
+          "number_of_replicas": 0,
+          "refresh_interval": "30s",
+          "merge_max_thread_count": 8,
+          "use_rescore": false,
+          "oversample_ratio": 2.0,
+          "use_routing": false,
+          "use_force_merge": true,
+          "metric_type": "COSINE",
+          "efConstruction": 360,
+          "M": 30,
+          "num_candidates": null
+        },
+        "case_config": {
+          "case_id": 10,
+          "custom_case": {},
+          "k": 100,
+          "concurrency_search_config": {
+            "num_concurrency": [
+              1,
+              5,
+              10,
+              20,
+              30,
+              40,
+              60,
+              80
+            ],
+            "concurrency_duration": 30,
+            "concurrency_timeout": 3600
+          }
+        },
+        "stages": [
+          "drop_old",
+          "load",
+          "search_serial",
+          "search_concurrent"
+        ],
+        "load_concurrency": 0,
+        "deep1b_dataset_percentage": null
+      },
+      "label": ":)"
+    },
+    {
+      "metrics": {
+        "max_load_count": 0,
+        "insert_duration": 0.0,
+        "optimize_duration": 0.0,
+        "load_duration": 0.0,
+        "qps": 0.0,
+        "serial_latency_p99": 0.0,
+        "serial_latency_p95": 0.0,
+        "recall": 0.0,
+        "ndcg": 0.0,
+        "conc_num_list": [],
+        "conc_qps_list": [],
+        "conc_latency_p99_list": [],
+        "conc_latency_p95_list": [],
+        "conc_latency_avg_list": [],
+        "payload_profile": "ids_only",
+        "payload_estimated_bytes_per_query": 0,
+        "inserted_count": 0,
+        "insert_rows_per_second": 0.0,
+        "insert_completion_seconds": 0.0,
+        "searchable_after_insert_seconds": 0.0,
+        "indexed_after_searchable_seconds": 0.0,
+        "additional_parameters": {},
+        "st_ideal_insert_duration": 0,
+        "st_search_stage_list": [],
+        "st_search_time_list": [],
+        "st_max_qps_list_list": [],
+        "st_recall_list": [],
+        "st_ndcg_list": [],
+        "st_serial_latency_p99_list": [],
+        "st_serial_latency_p95_list": [],
+        "st_conc_failed_rate_list": [],
+        "st_conc_num_list_list": [],
+        "st_conc_qps_list_list": [],
+        "st_conc_latency_p99_list_list": [],
+        "st_conc_latency_p95_list_list": [],
+        "st_conc_latency_avg_list_list": []
+      },
+      "task_config": {
+        "db": "ElasticCloud",
+        "db_config": {
+          "db_label": "upTo2.5c8g",
+          "version": "",
+          "note": "",
+          "cloud_id": "**********",
+          "scheme": "https",
+          "host": "",
+          "port": 9200,
+          "user": "elastic",
+          "password": "**********"
+        },
+        "db_case_config": {
+          "element_type": "float",
+          "index": "hnsw",
+          "number_of_shards": 1,
+          "number_of_replicas": 0,
+          "refresh_interval": "30s",
+          "merge_max_thread_count": 8,
+          "use_rescore": false,
+          "oversample_ratio": 2.0,
+          "use_routing": false,
+          "use_force_merge": true,
+          "metric_type": "COSINE",
+          "efConstruction": 360,
+          "M": 30,
+          "num_candidates": null
+        },
+        "case_config": {
+          "case_id": 11,
+          "custom_case": {},
+          "k": 100,
+          "concurrency_search_config": {
+            "num_concurrency": [
+              1,
+              5,
+              10,
+              20,
+              30,
+              40,
+              60,
+              80
+            ],
+            "concurrency_duration": 30,
+            "concurrency_timeout": 3600
+          }
+        },
+        "stages": [
+          "drop_old",
+          "load",
+          "search_serial",
+          "search_concurrent"
+        ],
+        "load_concurrency": 0,
+        "deep1b_dataset_percentage": null
+      },
+      "label": "?"
+    },
+    {
+      "metrics": {
+        "max_load_count": 0,
+        "insert_duration": 0.0,
+        "optimize_duration": 0.0,
+        "load_duration": 8671.2705,
+        "qps": 17.3271,
+        "serial_latency_p99": 3.7748,
+        "serial_latency_p95": 0.0,
+        "recall": 0.9961,
+        "ndcg": 0.0,
+        "conc_num_list": [],
+        "conc_qps_list": [],
+        "conc_latency_p99_list": [],
+        "conc_latency_p95_list": [],
+        "conc_latency_avg_list": [],
+        "payload_profile": "ids_only",
+        "payload_estimated_bytes_per_query": 0,
+        "inserted_count": 0,
+        "insert_rows_per_second": 0.0,
+        "insert_completion_seconds": 0.0,
+        "searchable_after_insert_seconds": 0.0,
+        "indexed_after_searchable_seconds": 0.0,
+        "additional_parameters": {},
+        "st_ideal_insert_duration": 0,
+        "st_search_stage_list": [],
+        "st_search_time_list": [],
+        "st_max_qps_list_list": [],
+        "st_recall_list": [],
+        "st_ndcg_list": [],
+        "st_serial_latency_p99_list": [],
+        "st_serial_latency_p95_list": [],
+        "st_conc_failed_rate_list": [],
+        "st_conc_num_list_list": [],
+        "st_conc_qps_list_list": [],
+        "st_conc_latency_p99_list_list": [],
+        "st_conc_latency_p95_list_list": [],
+        "st_conc_latency_avg_list_list": []
+      },
+      "task_config": {
+        "db": "ElasticCloud",
+        "db_config": {
+          "db_label": "upTo2.5c8g",
+          "version": "",
+          "note": "",
+          "cloud_id": "**********",
+          "scheme": "https",
+          "host": "",
+          "port": 9200,
+          "user": "elastic",
+          "password": "**********"
+        },
+        "db_case_config": {
+          "element_type": "float",
+          "index": "hnsw",
+          "number_of_shards": 1,
+          "number_of_replicas": 0,
+          "refresh_interval": "30s",
+          "merge_max_thread_count": 8,
+          "use_rescore": false,
+          "oversample_ratio": 2.0,
+          "use_routing": false,
+          "use_force_merge": true,
+          "metric_type": "COSINE",
+          "efConstruction": 360,
+          "M": 30,
+          "num_candidates": null
+        },
+        "case_config": {
+          "case_id": 400,
+          "custom_case": {
+            "filter_rate": 0.01,
+            "dataset_with_size_type": "Medium OpenAI (1536dim, 500K)"
+          },
+          "k": 100,
+          "concurrency_search_config": {
+            "num_concurrency": [
+              1,
+              5,
+              10,
+              20,
+              30,
+              40,
+              60,
+              80
+            ],
+            "concurrency_duration": 30,
+            "concurrency_timeout": 3600
+          }
+        },
+        "stages": [
+          "drop_old",
+          "load",
+          "search_serial",
+          "search_concurrent"
+        ],
+        "load_concurrency": 0,
+        "deep1b_dataset_percentage": null
+      },
+      "label": ":)"
+    },
+    {
+      "metrics": {
+        "max_load_count": 0,
+        "insert_duration": 0.0,
+        "optimize_duration": 0.0,
+        "load_duration": 0.0,
+        "qps": 0.0,
+        "serial_latency_p99": 0.0,
+        "serial_latency_p95": 0.0,
+        "recall": 0.0,
+        "ndcg": 0.0,
+        "conc_num_list": [],
+        "conc_qps_list": [],
+        "conc_latency_p99_list": [],
+        "conc_latency_p95_list": [],
+        "conc_latency_avg_list": [],
+        "payload_profile": "ids_only",
+        "payload_estimated_bytes_per_query": 0,
+        "inserted_count": 0,
+        "insert_rows_per_second": 0.0,
+        "insert_completion_seconds": 0.0,
+        "searchable_after_insert_seconds": 0.0,
+        "indexed_after_searchable_seconds": 0.0,
+        "additional_parameters": {},
+        "st_ideal_insert_duration": 0,
+        "st_search_stage_list": [],
+        "st_search_time_list": [],
+        "st_max_qps_list_list": [],
+        "st_recall_list": [],
+        "st_ndcg_list": [],
+        "st_serial_latency_p99_list": [],
+        "st_serial_latency_p95_list": [],
+        "st_conc_failed_rate_list": [],
+        "st_conc_num_list_list": [],
+        "st_conc_qps_list_list": [],
+        "st_conc_latency_p99_list_list": [],
+        "st_conc_latency_p95_list_list": [],
+        "st_conc_latency_avg_list_list": []
+      },
+      "task_config": {
+        "db": "ElasticCloud",
+        "db_config": {
+          "db_label": "upTo2.5c8g",
+          "version": "",
+          "note": "",
+          "cloud_id": "**********",
+          "scheme": "https",
+          "host": "",
+          "port": 9200,
+          "user": "elastic",
+          "password": "**********"
+        },
+        "db_case_config": {
+          "element_type": "float",
+          "index": "hnsw",
+          "number_of_shards": 1,
+          "number_of_replicas": 0,
+          "refresh_interval": "30s",
+          "merge_max_thread_count": 8,
+          "use_rescore": false,
+          "oversample_ratio": 2.0,
+          "use_routing": false,
+          "use_force_merge": true,
+          "metric_type": "COSINE",
+          "efConstruction": 360,
+          "M": 30,
+          "num_candidates": null
+        },
+        "case_config": {
+          "case_id": 400,
+          "custom_case": {
+            "filter_rate": 0.01,
+            "dataset_with_size_type": "Large OpenAI (1536dim, 5M)"
+          },
+          "k": 100,
+          "concurrency_search_config": {
+            "num_concurrency": [
+              1,
+              5,
+              10,
+              20,
+              30,
+              40,
+              60,
+              80
+            ],
+            "concurrency_duration": 30,
+            "concurrency_timeout": 3600
+          }
+        },
+        "stages": [
+          "drop_old",
+          "load",
+          "search_serial",
+          "search_concurrent"
+        ],
+        "load_concurrency": 0,
+        "deep1b_dataset_percentage": null
+      },
+      "label": "?"
+    },
+    {
+      "metrics": {
+        "max_load_count": 0,
+        "insert_duration": 0.0,
+        "optimize_duration": 0.0,
+        "load_duration": 8671.2705,
+        "qps": 26.26,
+        "serial_latency_p99": 0.5561,
+        "serial_latency_p95": 0.0,
+        "recall": 0.9999,
+        "ndcg": 0.0,
+        "conc_num_list": [],
+        "conc_qps_list": [],
+        "conc_latency_p99_list": [],
+        "conc_latency_p95_list": [],
+        "conc_latency_avg_list": [],
+        "payload_profile": "ids_only",
+        "payload_estimated_bytes_per_query": 0,
+        "inserted_count": 0,
+        "insert_rows_per_second": 0.0,
+        "insert_completion_seconds": 0.0,
+        "searchable_after_insert_seconds": 0.0,
+        "indexed_after_searchable_seconds": 0.0,
+        "additional_parameters": {},
+        "st_ideal_insert_duration": 0,
+        "st_search_stage_list": [],
+        "st_search_time_list": [],
+        "st_max_qps_list_list": [],
+        "st_recall_list": [],
+        "st_ndcg_list": [],
+        "st_serial_latency_p99_list": [],
+        "st_serial_latency_p95_list": [],
+        "st_conc_failed_rate_list": [],
+        "st_conc_num_list_list": [],
+        "st_conc_qps_list_list": [],
+        "st_conc_latency_p99_list_list": [],
+        "st_conc_latency_p95_list_list": [],
+        "st_conc_latency_avg_list_list": []
+      },
+      "task_config": {
+        "db": "ElasticCloud",
+        "db_config": {
+          "db_label": "upTo2.5c8g",
+          "version": "",
+          "note": "",
+          "cloud_id": "**********",
+          "scheme": "https",
+          "host": "",
+          "port": 9200,
+          "user": "elastic",
+          "password": "**********"
+        },
+        "db_case_config": {
+          "element_type": "float",
+          "index": "hnsw",
+          "number_of_shards": 1,
+          "number_of_replicas": 0,
+          "refresh_interval": "30s",
+          "merge_max_thread_count": 8,
+          "use_rescore": false,
+          "oversample_ratio": 2.0,
+          "use_routing": false,
+          "use_force_merge": true,
+          "metric_type": "COSINE",
+          "efConstruction": 360,
+          "M": 30,
+          "num_candidates": null
+        },
+        "case_config": {
+          "case_id": 400,
+          "custom_case": {
+            "filter_rate": 0.99,
+            "dataset_with_size_type": "Medium OpenAI (1536dim, 500K)"
+          },
+          "k": 100,
+          "concurrency_search_config": {
+            "num_concurrency": [
+              1,
+              5,
+              10,
+              20,
+              30,
+              40,
+              60,
+              80
+            ],
+            "concurrency_duration": 30,
+            "concurrency_timeout": 3600
+          }
+        },
+        "stages": [
+          "drop_old",
+          "load",
+          "search_serial",
+          "search_concurrent"
+        ],
+        "load_concurrency": 0,
+        "deep1b_dataset_percentage": null
+      },
+      "label": ":)"
+    },
+    {
+      "metrics": {
+        "max_load_count": 0,
+        "insert_duration": 0.0,
+        "optimize_duration": 0.0,
+        "load_duration": 0.0,
+        "qps": 0.0,
+        "serial_latency_p99": 0.0,
+        "serial_latency_p95": 0.0,
+        "recall": 0.0,
+        "ndcg": 0.0,
+        "conc_num_list": [],
+        "conc_qps_list": [],
+        "conc_latency_p99_list": [],
+        "conc_latency_p95_list": [],
+        "conc_latency_avg_list": [],
+        "payload_profile": "ids_only",
+        "payload_estimated_bytes_per_query": 0,
+        "inserted_count": 0,
+        "insert_rows_per_second": 0.0,
+        "insert_completion_seconds": 0.0,
+        "searchable_after_insert_seconds": 0.0,
+        "indexed_after_searchable_seconds": 0.0,
+        "additional_parameters": {},
+        "st_ideal_insert_duration": 0,
+        "st_search_stage_list": [],
+        "st_search_time_list": [],
+        "st_max_qps_list_list": [],
+        "st_recall_list": [],
+        "st_ndcg_list": [],
+        "st_serial_latency_p99_list": [],
+        "st_serial_latency_p95_list": [],
+        "st_conc_failed_rate_list": [],
+        "st_conc_num_list_list": [],
+        "st_conc_qps_list_list": [],
+        "st_conc_latency_p99_list_list": [],
+        "st_conc_latency_p95_list_list": [],
+        "st_conc_latency_avg_list_list": []
+      },
+      "task_config": {
+        "db": "ElasticCloud",
+        "db_config": {
+          "db_label": "upTo2.5c8g",
+          "version": "",
+          "note": "",
+          "cloud_id": "**********",
+          "scheme": "https",
+          "host": "",
+          "port": 9200,
+          "user": "elastic",
+          "password": "**********"
+        },
+        "db_case_config": {
+          "element_type": "float",
+          "index": "hnsw",
+          "number_of_shards": 1,
+          "number_of_replicas": 0,
+          "refresh_interval": "30s",
+          "merge_max_thread_count": 8,
+          "use_rescore": false,
+          "oversample_ratio": 2.0,
+          "use_routing": false,
+          "use_force_merge": true,
+          "metric_type": "COSINE",
+          "efConstruction": 360,
+          "M": 30,
+          "num_candidates": null
+        },
+        "case_config": {
+          "case_id": 400,
+          "custom_case": {
+            "filter_rate": 0.99,
+            "dataset_with_size_type": "Large OpenAI (1536dim, 5M)"
+          },
+          "k": 100,
+          "concurrency_search_config": {
+            "num_concurrency": [
+              1,
+              5,
+              10,
+              20,
+              30,
+              40,
+              60,
+              80
+            ],
+            "concurrency_duration": 30,
+            "concurrency_timeout": 3600
+          }
+        },
+        "stages": [
+          "drop_old",
+          "load",
+          "search_serial",
+          "search_concurrent"
+        ],
+        "load_concurrency": 0,
+        "deep1b_dataset_percentage": null
+      },
+      "label": "?"
+    }
+  ],
+  "file_fmt": "result_{}_{}_{}.json",
+  "timestamp": 1792047600.0
+}

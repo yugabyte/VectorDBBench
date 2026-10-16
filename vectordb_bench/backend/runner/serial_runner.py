@@ -190,7 +190,9 @@ class SerialSearchRunner:
                 for _ in test_data
             ]
             measure_recall = self.measure_recall
-            if self.tenant_labels and not measure_recall and self.db.supports_exact_tenant_search():
+            # Duck-typed DBs that don't subclass VectorDB may lack the hook.
+            supports_exact = getattr(self.db, "supports_exact_tenant_search", None)
+            if self.tenant_labels and not measure_recall and supports_exact is not None and supports_exact():
                 log.info(f"{mp.current_process().name:14} computing exact per-tenant ground truth")
                 ground_truth = [
                     self.db.exact_tenant_search(emb, self.k, tenant)

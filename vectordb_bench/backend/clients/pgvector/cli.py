@@ -199,8 +199,8 @@ class PgVectorTypedDict(CommonTypedDict):
             type=bool,
             default=True,
             show_default=True,
-            help="CloudMultiTenantSearchCase: hint the planner to use the vector index, and fail "
-            "the search if EXPLAIN shows a plan without it",
+            help="CloudMultiTenantSearchCase: hint the planner to use the vector index (needs "
+            "pg_hint_plan, which YugabyteDB bundles), and fail the search if EXPLAIN shows a plan without it",
         ),
     ]
 

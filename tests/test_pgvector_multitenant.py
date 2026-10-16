@@ -62,6 +62,9 @@ class FakeCursor:
         self.plan = plan
         self.executed = []
         self.copies = []
+        # (format_type, collation) of the tenant_id column, or None if it doesn't exist.
+        self.tenant_column = ("uuid", None)
+        self.hint_plan_setting = "on"
 
     def execute(self, query, params=None, **kwargs):
         text = query if isinstance(query, str) else query.as_string(None)
@@ -70,6 +73,10 @@ class FakeCursor:
             self.result = FakeResult([(self.server_version,)])
         elif "EXPLAIN" in text:
             self.result = FakeResult([(line,) for line in self.plan.splitlines()])
+        elif "pg_attribute" in text:
+            self.result = FakeResult([self.tenant_column] if self.tenant_column else [None])
+        elif "pg_hint_plan.enable_hint" in text:
+            self.result = FakeResult([(self.hint_plan_setting,)])
         else:
             self.result = FakeResult([(7,), (3,)])
         return self.result
@@ -200,6 +207,37 @@ def test_search_fails_when_plan_skips_vector_index(monkeypatch):
         db.prepare_filter(non_filter)
 
 
+def test_plan_failure_names_pg_hint_plan_when_not_loaded(monkeypatch):
+    db, cursor = make_db(monkeypatch, plan=PKEY_PLAN, server_version="PostgreSQL 17.2 on x86_64")
+    cursor.hint_plan_setting = None
+    with opened(db, cursor), pytest.raises(RuntimeError, match="pg_hint_plan is not loaded"):
+        db.prepare_filter(non_filter)
+
+
+def test_tenant_column_type_mismatch_is_reported(monkeypatch):
+    db, cursor = make_db(monkeypatch, tenant_column_type="text")
+    with opened(db, cursor), pytest.raises(RuntimeError, match="has tenant_id uuid, but --tenant-column-type is text"):
+        db.prepare_filter(non_filter)
+    assert not statements(cursor, "EXPLAIN")
+
+
+def test_text_tenant_column_needs_c_collation(monkeypatch):
+    db, cursor = make_db(monkeypatch, tenant_column_type="text")
+    cursor.tenant_column = ("text", "default")
+    with opened(db, cursor), pytest.raises(RuntimeError, match="COLLATE default"):
+        db.prepare_filter(non_filter)
+    cursor.tenant_column = ("text", "C")
+    with opened(db, cursor):
+        db.prepare_filter(non_filter)
+
+
+def test_missing_tenant_column_is_reported(monkeypatch):
+    db, cursor = make_db(monkeypatch)
+    cursor.tenant_column = None
+    with opened(db, cursor), pytest.raises(RuntimeError, match="has no tenant_id column"):
+        db.prepare_filter(non_filter)
+
+
 def test_no_hint_or_plan_check_when_not_forced(monkeypatch):
     db, cursor = make_db(monkeypatch, plan=PKEY_PLAN, force_vector_index=False)
     with opened(db, cursor):
@@ -209,14 +247,17 @@ def test_no_hint_or_plan_check_when_not_forced(monkeypatch):
     assert not statements(cursor, "/*+")
 
 
-def test_exact_search_uses_primary_key(monkeypatch):
+def test_exact_search_cannot_use_vector_index(monkeypatch):
     db, cursor = make_db(monkeypatch, plan=VECTOR_PLAN)
     with opened(db, cursor):
         db.prepare_filter(non_filter)
         cursor.plan = PKEY_PLAN
         assert db.exact_tenant_search([0.1] * DIM, 10, "tenant_0001") == [7, 3]
     text, params = cursor.executed[-1]
-    assert text.startswith('/*+ IndexScan("vdbbench_table_test" "vdbbench_table_test_pkey") */ SELECT "id"')
+    # No hint: the OFFSET 0 subquery keeps the ORDER BY away from the vector index, which
+    # also works on PostgreSQL without pg_hint_plan.
+    assert text.startswith('SELECT "id" FROM (SELECT "id", "embedding" FROM public."vdbbench_table_test" ')
+    assert "WHERE tenant_id = %s OFFSET 0) t ORDER BY" in text
     assert params[0] == uuid.uuid5(TENANT_UUID_NAMESPACE, "tenant_0001")
 
 

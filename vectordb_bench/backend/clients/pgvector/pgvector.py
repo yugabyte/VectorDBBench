@@ -675,14 +675,53 @@ class PgVector(VectorDB):
 
         self._search = self._generate_search_query()
         self._exact_search = None
-        if self.multitenant and self.case_config.force_vector_index:
-            hint = self._index_hint(self._index_name)
-            self._check_plan(hint, self._search, uses_vector_index=True)
-            self._search = sql.Composed([hint, self._search])
+        if self.multitenant:
+            self._check_tenant_column()
+            if self.case_config.force_vector_index:
+                hint = self._index_hint(self._index_name)
+                self._check_plan(hint, self._search, uses_vector_index=True)
+                self._search = sql.Composed([hint, self._search])
+
+    def _check_tenant_column(self):
+        """Fails with a clear message when the table wasn't loaded with the configured
+        tenant_column_type, e.g. in a --skip-load rerun, instead of a type error from the server."""
+        assert self.cursor is not None, "Cursor is not initialized"
+        row = self.cursor.execute(
+            "SELECT format_type(a.atttypid, a.atttypmod), co.collname FROM pg_attribute a "
+            "JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "LEFT JOIN pg_collation co ON co.oid = a.attcollation "
+            "WHERE n.nspname = 'public' AND c.relname = %s AND a.attname = %s AND NOT a.attisdropped",
+            (self.table_name, self._tenant_field),
+        ).fetchone()
+        self.conn.commit()
+        if row is None:
+            msg = (
+                f"{self.name} table public.{self.table_name} has no {self._tenant_field} column; "
+                "it was not loaded by CloudMultiTenantSearchCase. Rerun without --skip-load."
+            )
+            raise RuntimeError(msg)
+        column_type, collation = row
+        expected = self.case_config.tenant_column_type
+        if column_type != expected or (expected == "text" and collation != "C"):
+            msg = (
+                f"{self.name} table public.{self.table_name} has {self._tenant_field} {column_type}"
+                f"{f' COLLATE {collation}' if column_type == 'text' else ''}, but --tenant-column-type is "
+                f"{expected}{' (COLLATE C)' if expected == 'text' else ''}. Pass the type the table was "
+                "loaded with, or reload it."
+            )
+            raise RuntimeError(msg)
 
     def _index_hint(self, index_name: str) -> sql.Composable:
-        # pg_hint_plan reads the hint from a comment at the head of the statement.
+        # pg_hint_plan reads the hint from a comment at the head of the statement. YugabyteDB
+        # bundles it; on PostgreSQL the hint is just a comment unless pg_hint_plan is loaded.
         return sql.SQL("/*+ IndexScan({} {}) */ ").format(sql.Identifier(self.table_name), sql.Identifier(index_name))
+
+    def _hints_enabled(self) -> bool:
+        # The GUC exists only once pg_hint_plan is loaded.
+        assert self.cursor is not None, "Cursor is not initialized"
+        row = self.cursor.execute("SELECT current_setting('pg_hint_plan.enable_hint', true)").fetchone()
+        self.conn.commit()
+        return row is not None and row[0] == "on"
 
     def _check_plan(self, hint: sql.Composable, query: sql.Composable, uses_vector_index: bool):
         """Fails unless the plan of hint + query uses (or, for the exact search, avoids) the
@@ -698,6 +737,11 @@ class PgVector(VectorDB):
                 f"{self.name} plan {'does not use' if uses_vector_index else 'uses'} the vector index "
                 f"{self._index_name}:\n{plan}"
             )
+            if uses_vector_index and not self._hints_enabled():
+                msg += (
+                    "\npg_hint_plan is not loaded, so the IndexScan hint had no effect. Load it "
+                    "(shared_preload_libraries or LOAD 'pg_hint_plan'), or pass --no-force-vector-index."
+                )
             raise RuntimeError(msg)
         log.info(f"{self.name} search plan:\n{plan}")
 
@@ -711,9 +755,12 @@ class PgVector(VectorDB):
         assert self.cursor is not None, "Cursor is not initialized"
         if self._exact_search is None:
             index_param = self.case_config.index_param()
+            # OFFSET 0 keeps the tenant's rows in a subquery the planner doesn't flatten, so the
+            # ORDER BY can't be served by the vector index and every row of the tenant is sorted
+            # by its exact distance. Unlike an index hint, this works without pg_hint_plan.
             body = sql.SQL(
-                "SELECT {id} FROM public.{table_name} {where_clause} ORDER BY {vector} {op} %s::{vector_type}({dim}) "
-                "LIMIT %s::int"
+                "SELECT {id} FROM (SELECT {id}, {vector} FROM public.{table_name} {where_clause} OFFSET 0) t "
+                "ORDER BY {vector} {op} %s::{vector_type}({dim}) LIMIT %s::int"
             ).format(
                 id=sql.Identifier(self._primary_field),
                 table_name=sql.Identifier(self.table_name),
@@ -723,10 +770,8 @@ class PgVector(VectorDB):
                 vector_type=sql.SQL(index_param["table_quantization_type"]),
                 dim=sql.Literal(self.dim),
             )
-            # Read the tenant's rows through the primary key and sort them all by distance.
-            hint = self._index_hint(f"{self.table_name}_pkey")
-            self._check_plan(hint, body, uses_vector_index=False)
-            self._exact_search = sql.Composed([hint, body])
+            self._check_plan(sql.SQL(""), body, uses_vector_index=False)
+            self._exact_search = body
         result = self.cursor.execute(
             self._exact_search, (self._tenant_value(tenant), np.asarray(query), k), prepare=True, binary=True
         )
