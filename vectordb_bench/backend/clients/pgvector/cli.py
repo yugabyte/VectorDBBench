@@ -172,6 +172,37 @@ class PgVectorTypedDict(CommonTypedDict):
             callback=set_default_quantized_fetch_limit,
         ),
     ]
+    num_tablets: Annotated[
+        int | None,
+        click.option(
+            "--num-tablets",
+            type=int,
+            help="YugabyteDB only: create the table with SPLIT INTO <n> TABLETS",
+            required=False,
+        ),
+    ]
+    tenant_column_type: Annotated[
+        str,
+        click.option(
+            "--tenant-column-type",
+            type=click.Choice(["uuid", "text"]),
+            default="uuid",
+            show_default=True,
+            help="CloudMultiTenantSearchCase: type of the tenant_id hash key column "
+            '(uuid: uuid5 of the tenant label; text: the label, COLLATE "C")',
+        ),
+    ]
+    force_vector_index: Annotated[
+        bool,
+        click.option(
+            "--force-vector-index/--no-force-vector-index",
+            type=bool,
+            default=True,
+            show_default=True,
+            help="CloudMultiTenantSearchCase: hint the planner to use the vector index, and fail "
+            "the search if EXPLAIN shows a plan without it",
+        ),
+    ]
 
 
 class PgVectorIVFFlatTypedDict(PgVectorTypedDict, IVFFlatTypedDict): ...
@@ -210,6 +241,9 @@ def PgVectorIVFFlat(
             reranking=parameters["reranking"],
             reranking_metric=parameters["reranking_metric"],
             quantized_fetch_limit=parameters["quantized_fetch_limit"],
+            num_tablets=parameters["num_tablets"],
+            tenant_column_type=parameters["tenant_column_type"],
+            force_vector_index=parameters["force_vector_index"],
         ),
         **parameters,
     )
@@ -251,6 +285,9 @@ def PgVectorHNSW(
             reranking=parameters["reranking"],
             reranking_metric=parameters["reranking_metric"],
             quantized_fetch_limit=parameters["quantized_fetch_limit"],
+            num_tablets=parameters["num_tablets"],
+            tenant_column_type=parameters["tenant_column_type"],
+            force_vector_index=parameters["force_vector_index"],
         ),
         **parameters,
     )

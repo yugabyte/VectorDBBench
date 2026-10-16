@@ -87,6 +87,15 @@ class PgVectorIndexConfig(BaseModel, DBCaseConfig):
     # See: https://github.com/pgvector/pgvector?tab=readme-ov-file#iterative-index-scans
     iterative_scan: str = "relaxed_order"
     deep1b_dataset_percentage: float | None = None
+    # YugabyteDB only: create the table with SPLIT INTO num_tablets TABLETS.
+    num_tablets: int | None = None
+    # Multi-tenant cases: type of the tenant_id key column, "uuid" (uuid5 of the tenant label)
+    # or "text" (the label itself, under the C collation).
+    tenant_column_type: str = "uuid"
+    # Multi-tenant cases: hint the planner to use the vector index and fail the search if
+    # EXPLAIN shows it doesn't. Small tenants otherwise tend to get a primary-key scan plus a
+    # sort, which never exercises the vector index.
+    force_vector_index: bool = True
 
     def parse_metric(self) -> str:
         d = {
