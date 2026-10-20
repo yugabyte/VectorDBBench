@@ -255,6 +255,16 @@ class VectorDB(ABC):
     def validate_multitenant_schema(self) -> None:
         return None
 
+    def supports_exact_tenant_search(self) -> bool:
+        """Whether exact_tenant_search is implemented. Multi-tenant cases have no
+        per-tenant ground truth files, so the serial runner uses it to compute recall."""
+        return False
+
+    def exact_tenant_search(self, query: list[float], k: int, tenant: str) -> list[int]:
+        """Exact (brute-force) k nearest neighbors of query among the rows of tenant.
+        Called inside init(), after prepare_filter."""
+        raise NotImplementedError
+
     @abstractmethod
     def insert_embeddings(
         self,

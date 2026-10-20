@@ -1,6 +1,7 @@
 """Wrapper around the Pgvector vector database over VectorDB"""
 
 import logging
+import uuid
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from typing import Any
@@ -17,6 +18,9 @@ from .config import PgVectorConfigDict, PgVectorIndexConfig
 
 log = logging.getLogger(__name__)
 
+# Namespace for uuid5(tenant label) tenant ids, so load and search processes agree on the ids.
+TENANT_UUID_NAMESPACE = uuid.UUID("6f1c6a52-3c1e-4b8e-9d0a-5b7f2f6c1a10")
+
 
 class PgVector(VectorDB):
     """Use psycopg instructions"""
@@ -32,6 +36,7 @@ class PgVector(VectorDB):
     cursor: psycopg.Cursor[Any] | None = None
 
     _search: sql.Composed
+    _exact_search: sql.Composed | None = None
 
     def __init__(
         self,
@@ -53,6 +58,15 @@ class PgVector(VectorDB):
         self._primary_field = "id"
         self._vector_field = "embedding"
         self._scalar_label_field = "label"
+        self._tenant_field = "tenant_id"
+
+        # CloudMultiTenantSearchCase: the table is keyed by PRIMARY KEY ((tenant_id) HASH, id ASC),
+        # and every search filters on one tenant, which YugabyteDB routes to the tablet holding it.
+        self.multitenant = "multitenant_tenant_labels" in kwargs
+        self.multitenant_tenant_labels = kwargs.get("multitenant_tenant_labels") or []
+        if self.multitenant and self.case_config.tenant_column_type not in ("uuid", "text"):
+            msg = f"Unsupported tenant_column_type: {self.case_config.tenant_column_type}"
+            raise ValueError(msg)
 
         # Detected lazily on first use: True for YugabyteDB, False for vanilla
         # PostgreSQL. Some statements (e.g. ALTER TABLE ... SET STORAGE) are only
@@ -443,12 +457,14 @@ class PgVector(VectorDB):
             log.info(f"{self.name} client create table : {self.table_name}")
 
             # create table
-            if self.with_scalar_labels:
+            if self.multitenant:
+                self._create_multitenant_table(dim, index_param["table_quantization_type"])
+            elif self.with_scalar_labels:
                 self.cursor.execute(
                     sql.SQL(
                         """
                         CREATE TABLE IF NOT EXISTS public.{table_name}
-                        ({primary_field} BIGINT PRIMARY KEY, embedding {table_quantization_type}({dim}), {label_field} VARCHAR(64));
+                        ({primary_field} BIGINT PRIMARY KEY, embedding {table_quantization_type}({dim}), {label_field} VARCHAR(64)){split};
                         """,  # noqa: E501
                     ).format(
                         table_name=sql.Identifier(self.table_name),
@@ -456,18 +472,20 @@ class PgVector(VectorDB):
                         dim=dim,
                         primary_field=sql.Identifier(self._primary_field),
                         label_field=sql.Identifier(self._scalar_label_field),
+                        split=self._split_clause(),
                     )
                 )
             else:
                 self.cursor.execute(
                     sql.SQL("""
                         CREATE TABLE IF NOT EXISTS public.{table_name}
-                        ({primary_field} BIGINT PRIMARY KEY, embedding {table_quantization_type}({dim}));
+                        ({primary_field} BIGINT PRIMARY KEY, embedding {table_quantization_type}({dim})){split};
                         """).format(
                         table_name=sql.Identifier(self.table_name),
                         table_quantization_type=sql.SQL(index_param["table_quantization_type"]),
                         dim=dim,
                         primary_field=sql.Identifier(self._primary_field),
+                        split=self._split_clause(),
                     )
                 )
             # Keep the embedding column stored inline (no TOAST out-of-line storage /
@@ -483,6 +501,86 @@ class PgVector(VectorDB):
         except Exception as e:
             log.warning(f"Failed to create pgvector table: {self.table_name} error: {e}")
             raise e from None
+
+    def _split_clause(self) -> sql.Composable:
+        num_tablets = self.case_config.num_tablets
+        if not num_tablets:
+            return sql.SQL("")
+        if not self._server_is_yugabytedb():
+            log.warning(f"{self.name} ignoring num_tablets={num_tablets}: the server is not YugabyteDB")
+            return sql.SQL("")
+        return sql.SQL(" SPLIT INTO {} TABLETS").format(sql.Literal(int(num_tablets)))
+
+    def _create_multitenant_table(self, dim: int, table_quantization_type: str):
+        if table_quantization_type not in ("vector", "halfvec"):
+            msg = f"CloudMultiTenantSearchCase supports only vector and halfvec tables, not {table_quantization_type}"
+            raise NotImplementedError(msg)
+        # The tenant must be the leading hash key column for YugabyteDB to route a
+        # tenant_id = $1 search to one tablet. Text keys are routed only under the C collation.
+        tenant_type = sql.SQL("uuid" if self.case_config.tenant_column_type == "uuid" else 'text COLLATE "C"')
+        if self._server_is_yugabytedb():
+            primary_key = sql.SQL("PRIMARY KEY (({tenant}) HASH, {id} ASC)")
+        else:
+            primary_key = sql.SQL("PRIMARY KEY ({tenant}, {id})")
+        label_column = (
+            sql.SQL(", {} VARCHAR(64)").format(sql.Identifier(self._scalar_label_field))
+            if self.with_scalar_labels
+            else sql.SQL("")
+        )
+        self.cursor.execute(
+            sql.SQL(
+                "CREATE TABLE IF NOT EXISTS public.{table_name} "
+                "({tenant} {tenant_type}, {id} BIGINT, {vector} {vector_type}({dim}){label_column}, {primary_key})"
+                "{split}"
+            ).format(
+                table_name=sql.Identifier(self.table_name),
+                tenant=sql.Identifier(self._tenant_field),
+                tenant_type=tenant_type,
+                id=sql.Identifier(self._primary_field),
+                vector=sql.Identifier(self._vector_field),
+                vector_type=sql.SQL(table_quantization_type),
+                dim=sql.Literal(dim),
+                label_column=label_column,
+                primary_key=primary_key.format(
+                    tenant=sql.Identifier(self._tenant_field),
+                    id=sql.Identifier(self._primary_field),
+                ),
+                split=self._split_clause(),
+            )
+        )
+
+    def _tenant_value(self, tenant: str) -> uuid.UUID | str:
+        if self.case_config.tenant_column_type == "uuid":
+            return uuid.uuid5(TENANT_UUID_NAMESPACE, tenant)
+        return tenant
+
+    def _insert_multitenant(
+        self,
+        embeddings_arr: np.ndarray,
+        metadata_arr: np.ndarray,
+        tenant_labels_data: list[str],
+        labels_data: list[str] | None,
+    ):
+        table_quantization_type = self.case_config.index_param()["table_quantization_type"]
+        columns = [self._tenant_field, self._primary_field, self._vector_field]
+        types = [self.case_config.tenant_column_type, "bigint", table_quantization_type]
+        if self.with_scalar_labels:
+            columns.append(self._scalar_label_field)
+            types.append("varchar")
+        tenant_values = {label: self._tenant_value(label) for label in set(tenant_labels_data)}
+        with self.cursor.copy(
+            sql.SQL("COPY public.{table_name} ({columns}) FROM STDIN (FORMAT BINARY)").format(
+                table_name=sql.Identifier(self.table_name),
+                columns=sql.SQL(", ").join(sql.Identifier(c) for c in columns),
+            )
+        ) as copy:
+            copy.set_types(types)
+            for i, row in enumerate(metadata_arr):
+                embedding = np.float16(embeddings_arr[i]) if table_quantization_type == "halfvec" else embeddings_arr[i]
+                values = [tenant_values[tenant_labels_data[i]], row, embedding]
+                if self.with_scalar_labels:
+                    values.append(labels_data[i])
+                copy.write_row(values)
 
     def insert_embeddings(  # noqa: PLR0912
         self,
@@ -504,7 +602,11 @@ class PgVector(VectorDB):
             metadata_arr = np.array(metadata)
             embeddings_arr = np.array(embeddings)
 
-            if index_param["table_quantization_type"] == "bit":
+            if self.multitenant:
+                tenant_labels_data = kwargs.get("tenant_labels_data")
+                assert tenant_labels_data is not None, "tenant_labels_data is required for multi-tenant cases"
+                self._insert_multitenant(embeddings_arr, metadata_arr, tenant_labels_data, labels_data)
+            elif index_param["table_quantization_type"] == "bit":
                 with self.cursor.copy(
                     sql.SQL("COPY public.{table_name} FROM STDIN (FORMAT TEXT)").format(
                         table_name=sql.Identifier(self.table_name)
@@ -553,16 +655,129 @@ class PgVector(VectorDB):
 
     def prepare_filter(self, filters: Filter):
         if filters.type == FilterOp.NonFilter:
-            self.where_clause = ""
+            conditions = []
         elif filters.type == FilterOp.NumGE:
-            self.where_clause = f"WHERE {self._primary_field} >= {filters.int_value}"
+            conditions = [f"{self._primary_field} >= {filters.int_value}"]
         elif filters.type == FilterOp.StrEqual:
-            self.where_clause = f"WHERE {self._scalar_label_field} = '{filters.label_value}'"
+            conditions = [f"{self._scalar_label_field} = '{filters.label_value}'"]
         else:
             msg = f"Not support Filter for PgVector - {filters}"
             raise ValueError(msg)
 
+        if self.multitenant:
+            index_param = self.case_config.index_param()
+            if index_param["quantization_type"] != index_param["table_quantization_type"]:
+                msg = "CloudMultiTenantSearchCase doesn't support index quantization different from the table's"
+                raise NotImplementedError(msg)
+            # Bound per search; the tenant value is the first query parameter.
+            conditions.insert(0, f"{self._tenant_field} = %s")
+        self.where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
         self._search = self._generate_search_query()
+        self._exact_search = None
+        if self.multitenant:
+            self._check_tenant_column()
+            if self.case_config.force_vector_index:
+                hint = self._index_hint(self._index_name)
+                self._check_plan(hint, self._search, uses_vector_index=True)
+                self._search = sql.Composed([hint, self._search])
+
+    def _check_tenant_column(self):
+        """Fails with a clear message when the table wasn't loaded with the configured
+        tenant_column_type, e.g. in a --skip-load rerun, instead of a type error from the server."""
+        assert self.cursor is not None, "Cursor is not initialized"
+        row = self.cursor.execute(
+            "SELECT format_type(a.atttypid, a.atttypmod), co.collname FROM pg_attribute a "
+            "JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "LEFT JOIN pg_collation co ON co.oid = a.attcollation "
+            "WHERE n.nspname = 'public' AND c.relname = %s AND a.attname = %s AND NOT a.attisdropped",
+            (self.table_name, self._tenant_field),
+        ).fetchone()
+        self.conn.commit()
+        if row is None:
+            msg = (
+                f"{self.name} table public.{self.table_name} has no {self._tenant_field} column; "
+                "it was not loaded by CloudMultiTenantSearchCase. Rerun without --skip-load."
+            )
+            raise RuntimeError(msg)
+        column_type, collation = row
+        expected = self.case_config.tenant_column_type
+        if column_type != expected or (expected == "text" and collation != "C"):
+            msg = (
+                f"{self.name} table public.{self.table_name} has {self._tenant_field} {column_type}"
+                f"{f' COLLATE {collation}' if column_type == 'text' else ''}, but --tenant-column-type is "
+                f"{expected}{' (COLLATE C)' if expected == 'text' else ''}. Pass the type the table was "
+                "loaded with, or reload it."
+            )
+            raise RuntimeError(msg)
+
+    def _index_hint(self, index_name: str) -> sql.Composable:
+        # pg_hint_plan reads the hint from a comment at the head of the statement. YugabyteDB
+        # bundles it; on PostgreSQL the hint is just a comment unless pg_hint_plan is loaded.
+        return sql.SQL("/*+ IndexScan({} {}) */ ").format(sql.Identifier(self.table_name), sql.Identifier(index_name))
+
+    def _hints_enabled(self) -> bool:
+        # The GUC exists only once pg_hint_plan is loaded.
+        assert self.cursor is not None, "Cursor is not initialized"
+        row = self.cursor.execute("SELECT current_setting('pg_hint_plan.enable_hint', true)").fetchone()
+        self.conn.commit()
+        return row is not None and row[0] == "on"
+
+    def _check_plan(self, hint: sql.Composable, query: sql.Composable, uses_vector_index: bool):
+        """Fails unless the plan of hint + query uses (or, for the exact search, avoids) the
+        vector index. EXPLAIN doesn't run the query, so any tenant and vector will do."""
+        assert self.cursor is not None, "Cursor is not initialized"
+        tenant = self._tenant_value(self.multitenant_tenant_labels[0] if self.multitenant_tenant_labels else "")
+        params = (tenant, np.zeros(self.dim, dtype=np.float32), 10)
+        rows = self.cursor.execute(sql.Composed([hint, sql.SQL("EXPLAIN "), query]), params).fetchall()
+        self.conn.commit()
+        plan = "\n".join(r[0] for r in rows)
+        if (self._index_name in plan) != uses_vector_index:
+            msg = (
+                f"{self.name} plan {'does not use' if uses_vector_index else 'uses'} the vector index "
+                f"{self._index_name}:\n{plan}"
+            )
+            if uses_vector_index and not self._hints_enabled():
+                msg += (
+                    "\npg_hint_plan is not loaded, so the IndexScan hint had no effect. Load it "
+                    "(shared_preload_libraries or LOAD 'pg_hint_plan'), or pass --no-force-vector-index."
+                )
+            raise RuntimeError(msg)
+        log.info(f"{self.name} search plan:\n{plan}")
+
+    def supports_multitenant(self) -> bool:
+        return True
+
+    def supports_exact_tenant_search(self) -> bool:
+        return self.multitenant
+
+    def exact_tenant_search(self, query: list[float], k: int, tenant: str) -> list[int]:
+        assert self.cursor is not None, "Cursor is not initialized"
+        if self._exact_search is None:
+            index_param = self.case_config.index_param()
+            # OFFSET 0 keeps the tenant's rows in a subquery the planner doesn't flatten, so the
+            # ORDER BY can't be served by the vector index and every row of the tenant is sorted
+            # by its exact distance. Unlike an index hint, this works without pg_hint_plan.
+            body = sql.SQL(
+                "SELECT {id} FROM (SELECT {id}, {vector} FROM public.{table_name} {where_clause} OFFSET 0) t "
+                "ORDER BY {vector} {op} %s::{vector_type}({dim}) LIMIT %s::int"
+            ).format(
+                id=sql.Identifier(self._primary_field),
+                table_name=sql.Identifier(self.table_name),
+                where_clause=sql.SQL(self.where_clause),
+                vector=sql.Identifier(self._vector_field),
+                op=sql.SQL(self.case_config.search_param()["metric_fun_op"]),
+                vector_type=sql.SQL(index_param["table_quantization_type"]),
+                dim=sql.Literal(self.dim),
+            )
+            self._check_plan(sql.SQL(""), body, uses_vector_index=False)
+            self._exact_search = body
+        result = self.cursor.execute(
+            self._exact_search, (self._tenant_value(tenant), np.asarray(query), k), prepare=True, binary=True
+        )
+        rows = [int(r[0]) for r in result.fetchall()]
+        self.conn.commit()
+        return rows
 
     def search_embedding(
         self,
@@ -577,10 +792,11 @@ class PgVector(VectorDB):
         index_param = self.case_config.index_param()
         search_param = self.case_config.search_param()
         q = np.asarray(query)
-        result = self.cursor.execute(
-            self._search,
-            (q, q, k) if index_param["quantization_type"] == "bit" and search_param["reranking"] else (q, k),
-            prepare=True,
-            binary=True,
-        )
+        if self.multitenant:
+            params = (self._tenant_value(kwargs["tenant"]), q, k)
+        elif index_param["quantization_type"] == "bit" and search_param["reranking"]:
+            params = (q, q, k)
+        else:
+            params = (q, k)
+        result = self.cursor.execute(self._search, params, prepare=True, binary=True)
         return [int(i[0]) for i in result.fetchall()]
